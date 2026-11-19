@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-theme="gray">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Effigies</title>
+<meta name="theme-color" content="#3c3c3c">
+<meta name="description" content="Effigies: an offline, ad-free image editor for album covers, lettering and effects.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/effigies.css">
+<script>
+  // Shared suite theme (key studio.theme: 'dark' | 'gray' | 'light'), applied before first paint.
+  try {
+    var t = localStorage.getItem('studio.theme');
+    document.documentElement.dataset.theme = (t === 'dark') ? 'dark' : 'gray';
+  } catch (e) {}
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="menubar" role="menubar" aria-label="Menu"></div>
+  <div id="appbar"></div>
+  <div id="optionsbar" aria-label="Tool options"></div>
+  <div id="main">
+    <div id="toolbox" role="toolbar" aria-label="Tools" aria-orientation="vertical"></div>
+    <div id="center">
+      <div id="tabs" role="tablist" aria-label="Documents"></div>
+      <div id="stage">
+        <canvas id="view"></canvas>
+        <canvas id="overlay" tabindex="0" aria-label="Canvas"></canvas>
+        <div id="empty">
+          <div class="empty-card">
+            <h2>Effigies</h2>
+            <p>Offline image editor for album covers, lettering and effects.</p>
+            <div class="row">
+              <button class="btn primary" id="empty-new">New document</button>
+              <button class="btn" id="empty-open">Open image…</button>
+            </div>
+            <p class="small muted">Tip: Ctrl+N for a new 3000 × 3000 cover. Your work is saved automatically.</p>
+          </div>
+        </div>
+      </div>
+      <div id="statusbar"></div>
+    </div>
+    <div id="dock" aria-label="Panels"></div>
+  </div>
+</div>
+<input type="file" id="file-image" accept="image/*" multiple hidden>
+<input type="file" id="file-project" accept=".json,.effigies,application/json" hidden>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
