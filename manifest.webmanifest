@@ -2,7 +2,7 @@
   "name": "Effigies",
   "short_name": "Effigies",
   "description": "Offline image editor for album covers, lettering and effects. Part of the Abditum suite.",
-  "id": "./",
+  "id": "/effigies/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
