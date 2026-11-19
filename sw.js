@@ -1,5 +1,5 @@
 // Offline cache for Effigies. Bump VERSION on every release (it must match APP_VERSION in js/main.js).
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const CACHE = 'effigies-cache-' + VERSION;
 const ASSETS = [
   './',
