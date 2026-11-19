@@ -18,6 +18,7 @@ export async function exportProject(doc, appVersion) {
       if (L.type === 'group') { o.collapsed = L.collapsed; o.children = await enc(L.children); }
       else if (L.canvas) { images.push(await blobToDataURL(await canvasToBlob(L.canvas))); o.image = `@@IMG${images.length - 1}@@`; }
       else o.image = null;
+      if (L.type !== 'group' && L.mask) { images.push(await blobToDataURL(await canvasToBlob(L.mask.canvas))); o.mask = { x: L.mask.x, y: L.mask.y, width: L.mask.canvas.width, height: L.mask.canvas.height, enabled: L.maskOn, image: `@@IMG${images.length - 1}@@` }; }
       out.push(o);
     }
     return out;
@@ -64,7 +65,10 @@ export async function importProject(text, { newId = false } = {}) {
         lockTrans: lk.transparentPixels, lockPix: lk.imagePixels, lockPos: lk.position, lockAll: lk.all, x: o.x || 0, y: o.y || 0, collapsed: o.collapsed,
       });
       if (L.type === 'group') L.children = await dec(o.children || []);
-      else if (o.image) L.canvas = await decodeImage(o.image);
+      else {
+        if (o.image) L.canvas = await decodeImage(o.image);
+        if (o.mask && o.mask.image) { L.mask = { canvas: await decodeImage(o.mask.image), x: o.mask.x || 0, y: o.mask.y || 0 }; L.maskOn = o.mask.enabled !== false; }
+      }
       out.push(L);
     }
     return out;

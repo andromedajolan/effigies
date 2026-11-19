@@ -1,6 +1,7 @@
 // The canvas view: zoom, pan, drawing the composite, the overlay (brush ring, cover guides) and pointer routing.
 import { compose, releaseCanvas } from './render.js';
 import { clamp } from './util.js';
+import { buildAnts } from './select.js';
 
 export const ZOOM_STEPS = [0.03125, 0.0625, 0.125, 0.25, 1 / 3, 0.5, 2 / 3, 1, 2, 3, 4, 5, 6, 8, 12, 16, 32];
 
@@ -178,6 +179,7 @@ export class Viewport {
       if (p.guideSafe) { g.strokeStyle = '#ffb02a'; g.strokeRect(Math.round(x0 + W * 0.1) + 0.5, Math.round(y0 + H * 0.1) + 0.5, Math.round(W * 0.8), Math.round(H * 0.8)); }
       g.restore();
     }
+    this.drawAnts(g);
     const tool = this.app.tool;
     if (tool && tool.drawOverlay) tool.drawOverlay(g, this);
     if (this.cursor && tool && tool.ring) {
@@ -194,6 +196,15 @@ export class Viewport {
         g.restore();
       }
     }
+  }
+
+  drawAnts(g) {
+    const d = this.doc, sel = d && d.sel;
+    if (!sel) { if (this.antTimer) { clearInterval(this.antTimer); this.antTimer = 0; } this.ants = null; return; }
+    const v = d.view, key = `${v.zoom}|${v.tx}|${v.ty}|${this.W}|${this.H}`;
+    if (!this.ants || this.ants.sel !== sel || this.ants.key !== key) this.ants = { sel, key, img: buildAnts(sel, v, this.W, this.H), phase: this.ants ? this.ants.phase : 0 };
+    g.drawImage(this.ants.phase ? this.ants.img.b : this.ants.img.a, 0, 0);
+    if (!this.antTimer) this.antTimer = setInterval(() => { if (this.ants && this.doc && this.doc.sel === this.ants.sel && !document.hidden) { this.ants.phase ^= 1; this.drawOverlay(); } }, 450);
   }
 
   // ── input ──

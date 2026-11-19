@@ -1,7 +1,8 @@
 // Tools for stage 1: Move, Brush (plain), Eraser (plain), Hand, Zoom, Eyedropper.
 // Each tool: {id, name, key, group, icon, options[], down/move/up/cancel, ring()}
-import { makeCanvas, ctxOf, clamp, hexToRgb, rgbToHex, toast } from './util.js';
+import { makeCanvas, ctxOf, clamp, hexToRgb, rgbToHex, toast, rectIntersect } from './util.js';
 import { compose, releaseCanvas } from './render.js';
+import { createTools2 } from './tools2.js';
 
 const svg = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 export const ICONS = {
@@ -14,20 +15,44 @@ export const ICONS = {
 };
 
 // ───────────── Brush engine ─────────────
+export const BRUSH_DEFAULTS = { size: 40, hardness: 80, opacity: 100, flow: 100, spacing: 25, roundness: 100, angle: 0, scatter: 0, sizeJitter: 0, opacityJitter: 0, pressure: true, tip: 'round' };
+export const ERASER_DEFAULTS = { ...BRUSH_DEFAULTS, size: 60, hardness: 90 };
+export const TIPS = [['round', 'Round'], ['square', 'Square'], ['chalk', 'Chalk'], ['star', 'Star']];
+
 let tipCache = { key: '', canvas: null };
-function brushTip(size, hardness, color) {
-  const key = size.toFixed(2) + '|' + hardness + '|' + color;
+let noiseTile = null;
+function noise() {
+  if (noiseTile) return noiseTile;
+  const c = makeCanvas(64, 64, false), g = c.getContext('2d'), im = g.createImageData(64, 64);
+  let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  for (let i = 0; i < 64 * 64; i++) { im.data[i * 4 + 3] = rnd() < 0.62 ? 255 : 40 + rnd() * 90; }
+  g.putImageData(im, 0, 0); noiseTile = c; return c;
+}
+/** A brush tip image (size x size) of the given colour; roundness and angle are applied when stamping. */
+export function brushTip(size, hardness, color, shape = 'round') {
+  const key = size.toFixed(2) + '|' + hardness + '|' + color + '|' + shape;
   if (tipCache.key === key) return tipCache.canvas;
   const d = Math.max(1, Math.ceil(size) + 2), c = makeCanvas(d, d, false), g = c.getContext('2d');
   const r = size / 2, cx = d / 2;
   const [R, G, B] = hexToRgb(color);
-  if (hardness >= 99) {
+  const soft = clamp(1 - hardness / 100, 0, 1);
+  if (shape === 'square' || shape === 'star') {
+    g.fillStyle = color; g.beginPath();
+    if (shape === 'square') g.rect(cx - r, cx - r, size, size);
+    else for (let i = 0; i < 10; i++) { const rr = i % 2 ? r * 0.45 : r, a = -1.5708 + i * 0.62832; g.lineTo(cx + Math.cos(a) * rr, cx + Math.sin(a) * rr); }
+    g.closePath(); g.fill();
+    if (soft > 0.02 && size > 3) { const t = makeCanvas(d, d, false), tg = t.getContext('2d'); tg.filter = `blur(${soft * size * 0.18}px)`; tg.drawImage(c, 0, 0); g.clearRect(0, 0, d, d); g.drawImage(t, 0, 0); }
+  } else if (hardness >= 99) {
     g.fillStyle = color; g.beginPath(); g.arc(cx, cx, Math.max(0.5, r), 0, 6.2832); g.fill();
   } else {
     const gr = g.createRadialGradient(cx, cx, 0, cx, cx, Math.max(0.5, r));
     const hh = clamp(hardness / 100, 0, 0.98);
     gr.addColorStop(0, `rgba(${R},${G},${B},1)`); gr.addColorStop(hh, `rgba(${R},${G},${B},1)`); gr.addColorStop(1, `rgba(${R},${G},${B},0)`);
     g.fillStyle = gr; g.fillRect(0, 0, d, d);
+  }
+  if (shape === 'chalk') {
+    g.save(); g.globalCompositeOperation = 'destination-in';
+    g.fillStyle = g.createPattern(noise(), 'repeat'); g.fillRect(0, 0, d, d); g.restore();
   }
   tipCache = { key, canvas: c };
   return c;
@@ -37,16 +62,16 @@ class StrokeTool {
   constructor(app, id, name, key, erase) {
     this.app = app; this.id = id; this.name = name; this.key = key; this.group = id; this.erase = erase; this.icon = ICONS[id];
     this.stroke = null;
-    this.defaults = erase ? { size: 60, hardness: 90, opacity: 100, flow: 100 } : { size: 40, hardness: 80, opacity: 100, flow: 100 };
+    this.defaults = erase ? ERASER_DEFAULTS : BRUSH_DEFAULTS;
     this.options = [
       { key: 'size', label: 'Size', type: 'number', min: 1, max: 5000, slider: [1, 500], suffix: 'px' },
       { key: 'hardness', label: 'Hardness', type: 'number', min: 0, max: 100, suffix: '%' },
       { key: 'opacity', label: 'Opacity', type: 'number', min: 1, max: 100, suffix: '%' },
       { key: 'flow', label: 'Flow', type: 'number', min: 1, max: 100, suffix: '%' },
     ];
-    this.hint = 'Stage 1 has a plain round brush. Dynamics, masks and the full Brush panel arrive in stage 2.';
+    this.hint = 'More controls (spacing, angle, scatter, jitter, tip) are in the Brush panel.';
   }
-  get o() { return this.app.opts(this.id, this.defaults); }
+  get o() { return { ...BRUSH_DEFAULTS, ...this.app.opts(this.id, this.defaults) }; }
   ring() { return this.o.size / 2; }
   ready() {
     const doc = this.app.doc; if (!doc) return null;
@@ -54,38 +79,80 @@ class StrokeTool {
     if (!L) { toast('Add or select a layer first.'); return null; }
     if (L.type !== 'raster') { toast('Select a regular layer (a group has no pixels).'); return null; }
     if (!L.visible) { toast('That layer is hidden.'); return null; }
+    if (L.editMask && L.mask) return L;
     if (L.lockAll || L.lockPix) { toast('That layer is locked.'); return null; }
     if (this.erase && L.lockTrans) { toast('Unlock transparent pixels to erase.'); return null; }
     return L;
   }
   down(c) {
     const L = this.ready(); if (!L) return;
-    const doc = this.app.doc;
+    const doc = this.app.doc, o = this.o, maskMode = !!(L.editMask && L.mask);
     let x0 = 0, y0 = 0, x1 = doc.w, y1 = doc.h;
     if (L.canvas) { x0 = Math.min(x0, L.x); y0 = Math.min(y0, L.y); x1 = Math.max(x1, L.x + L.w); y1 = Math.max(y1, L.y + L.h); }
-    this.stroke = { layer: L, canvas: makeCanvas(x1 - x0, y1 - y0, false), ox: x0, oy: y0, opacity: this.o.opacity / 100, erase: this.erase, last: null, carry: 0, dirty: null, pts: 0 };
-    doc.live = this.stroke;
+    const s = this.stroke = { layer: L, canvas: makeCanvas(x1 - x0, y1 - y0, false), ox: x0, oy: y0, opacity: o.opacity / 100, erase: this.erase, last: null, carry: 0, dirty: null, pts: 0, maskMode, o,
+      show: doc.sel ? makeCanvas(x1 - x0, y1 - y0, false) : null, pressure: 1, seed: (Math.random() * 1e9) | 0 };
+    if (maskMode) {
+      L.ensureMaskRect(x0, y0, x1, y1);
+      const m = L.mask; s.bx = L.x + m.x; s.by = L.y + m.y; s.base = cloneCanvasPlain(m.canvas);
+      const col = this.erase ? this.app.bg : this.app.fg; const [R, G, B] = hexToRgb(col);
+      s.target = 1 - (0.299 * R + 0.587 * G + 0.114 * B) / 255;
+    } else doc.live = s;
+    this.pressure(c);
     this.dab(c.x, c.y);
-    this.stroke.last = { x: c.x, y: c.y };
+    s.last = { x: c.x, y: c.y };
     this.flush();
   }
+  pressure(c) { const s = this.stroke; s.pressure = (s.o.pressure && c.e && c.e.pointerType === 'pen' && c.e.pressure > 0) ? clamp(c.e.pressure * 1.25, 0.05, 1) : 1; }
+  rnd() { const s = this.stroke; s.seed = (s.seed * 1664525 + 1013904223) >>> 0; return s.seed / 4294967296; }
   dab(x, y) {
-    const s = this.stroke, o = this.o;
-    const color = this.erase ? '#000000' : this.app.fg;
-    const tip = brushTip(o.size, o.hardness, color);
+    const s = this.stroke, o = s.o;
+    const color = (this.erase || s.maskMode) ? '#000000' : this.app.fg;
+    const size = Math.max(0.5, o.size * s.pressure * (1 - (o.sizeJitter / 100) * this.rnd()));
+    if (o.scatter) { const sc = (o.scatter / 100) * o.size; x += (this.rnd() - 0.5) * 2 * sc; y += (this.rnd() - 0.5) * 2 * sc; }
+    const tip = brushTip(o.size, o.hardness, color, o.tip);
     const g = s.canvas.getContext('2d');
-    g.globalAlpha = o.flow / 100;
-    g.drawImage(tip, x - s.ox - tip.width / 2, y - s.oy - tip.height / 2);
-    const m = tip.width / 2 + 1;
+    g.globalAlpha = (o.flow / 100) * (1 - (o.opacityJitter / 100) * this.rnd());
+    const k = size / o.size, rd = o.roundness / 100, ang = o.angle * Math.PI / 180;
+    const px = x - s.ox, py = y - s.oy;
+    if (k === 1 && rd === 1 && !ang) g.drawImage(tip, px - tip.width / 2, py - tip.height / 2);
+    else { g.save(); g.translate(px, py); g.rotate(ang); g.scale(k, k * rd); g.drawImage(tip, -tip.width / 2, -tip.height / 2); g.restore(); }
+    const m = (tip.width / 2) * Math.max(k, 1) + 1;
     const r = { x: Math.floor(x - m), y: Math.floor(y - m), w: Math.ceil(m * 2) + 1, h: Math.ceil(m * 2) + 1 };
-    if (!s.dirty) s.dirty = r;
-    else { const a = s.dirty, x0 = Math.min(a.x, r.x), y0 = Math.min(a.y, r.y); s.dirty = { x: x0, y: y0, w: Math.max(a.x + a.w, r.x + r.w) - x0, h: Math.max(a.y + a.h, r.y + r.h) - y0 }; }
-    s.pend = s.pend ? (() => { const a = s.pend, x0 = Math.min(a.x, r.x), y0 = Math.min(a.y, r.y); return { x: x0, y: y0, w: Math.max(a.x + a.w, r.x + r.w) - x0, h: Math.max(a.y + a.h, r.y + r.h) - y0 }; })() : r;
+    const un = (a, b) => { if (!a) return b; const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y); return { x: x0, y: y0, w: Math.max(a.x + a.w, b.x + b.w) - x0, h: Math.max(a.y + a.h, b.y + b.h) - y0 }; };
+    s.dirty = un(s.dirty, r); s.pend = un(s.pend, r);
   }
-  flush() { const s = this.stroke; if (s && s.pend) { this.app.vp.invalidate(s.pend); s.pend = null; } }
+  /** Bring the "visible" copy (selection-clipped) and, for masks, the mask itself up to date for the pending rect. */
+  flush() {
+    const s = this.stroke; if (!s || !s.pend) return;
+    const doc = this.app.doc;
+    let r = rectIntersect(s.pend, { x: s.ox, y: s.oy, w: s.canvas.width, h: s.canvas.height }); s.pend = null;
+    if (!r) return;
+    if (s.show) {
+      const g = s.show.getContext('2d');
+      g.save(); g.beginPath(); g.rect(r.x - s.ox, r.y - s.oy, r.w, r.h); g.clip(); g.clearRect(r.x - s.ox, r.y - s.oy, r.w, r.h);
+      g.drawImage(s.canvas, 0, 0);
+      g.globalCompositeOperation = 'destination-in'; g.drawImage(doc.sel.canvas, doc.sel.x - s.ox, doc.sel.y - s.oy);
+      g.restore();
+    }
+    if (s.maskMode) this.applyMask(r);
+    this.app.vp.invalidate(r);
+  }
+  applyMask(r) {
+    const s = this.stroke, L = s.layer, m = L.mask;
+    const cov = (s.show || s.canvas).getContext('2d').getImageData(r.x - s.ox, r.y - s.oy, r.w, r.h).data;
+    const base = s.base.getContext('2d').getImageData(r.x - s.bx, r.y - s.by, r.w, r.h);
+    const d = base.data, t = s.target * 255;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = (cov[i + 3] / 255) * s.opacity;
+      d[i] = d[i + 1] = d[i + 2] = 0;
+      d[i + 3] = d[i + 3] * (1 - a) + t * a;
+    }
+    ctxOf(m.canvas).putImageData(base, r.x - s.bx, r.y - s.by);
+  }
   move(c) {
     const s = this.stroke; if (!s) return;
-    const spacing = Math.max(1, this.o.size * 0.25);
+    const o = s.o, spacing = Math.max(1, o.size * (o.spacing / 100));
+    this.pressure(c);
     const dx = c.x - s.last.x, dy = c.y - s.last.y, dist = Math.hypot(dx, dy);
     if (!dist) return;
     let t = spacing - s.carry;
@@ -96,6 +163,7 @@ class StrokeTool {
   }
   up() {
     const s = this.stroke; if (!s) return;
+    this.flush();
     this.stroke = null;
     const doc = this.app.doc; doc.live = null;
     const L = s.layer, r = s.dirty;
@@ -103,16 +171,29 @@ class StrokeTool {
     const cl = { x: Math.max(r.x, s.ox), y: Math.max(r.y, s.oy), w: 0, h: 0 };
     cl.w = Math.min(r.x + r.w, s.ox + s.canvas.width) - cl.x; cl.h = Math.min(r.y + r.h, s.oy + s.canvas.height) - cl.y;
     if (cl.w <= 0 || cl.h <= 0) { this.app.vp.invalidate(); return; }
+    if (s.maskMode) {
+      const before = s.base.getContext('2d').getImageData(cl.x - s.bx, cl.y - s.by, cl.w, cl.h);
+      const after = ctxOf(L.mask.canvas).getImageData(cl.x - s.bx, cl.y - s.by, cl.w, cl.h);
+      L.touchMask();
+      doc.pushMaskPatch(L, cl, before, after, this.erase ? 'Eraser (Mask)' : 'Brush Tool (Mask)');
+      return;
+    }
+    const src = s.show || s.canvas;
     doc.editPixels(L, cl, this.erase ? 'Eraser' : 'Brush Tool', (g, ox, oy) => {
       g.save();
       g.globalAlpha = s.opacity;
       g.globalCompositeOperation = this.erase ? 'destination-out' : (L.lockTrans ? 'source-atop' : 'source-over');
-      g.drawImage(s.canvas, 0, 0, s.canvas.width, s.canvas.height, s.ox + ox, s.oy + oy, s.canvas.width, s.canvas.height);
+      g.drawImage(src, 0, 0, src.width, src.height, s.ox + ox, s.oy + oy, src.width, src.height);
       g.restore();
     });
   }
-  cancel() { if (!this.stroke) return; this.stroke = null; this.app.doc.live = null; this.app.vp.invalidate(); }
+  cancel() {
+    const s = this.stroke; if (!s) return; this.stroke = null; this.app.doc.live = null;
+    if (s.maskMode) { const m = s.layer.mask; if (m && s.base) { const g = ctxOf(m.canvas); g.clearRect(0, 0, m.canvas.width, m.canvas.height); g.drawImage(s.base, 0, 0); } }
+    this.app.vp.invalidate();
+  }
 }
+function cloneCanvasPlain(c) { const n = makeCanvas(c.width, c.height); ctxOf(n).drawImage(c, 0, 0); return n; }
 
 // ───────────── Move ─────────────
 class MoveTool {
@@ -236,6 +317,7 @@ class EyedropperTool {
 }
 
 export function createTools(app) {
-  const list = [new MoveTool(app), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
+  const t2 = createTools2(app), pick = (re) => t2.filter((t) => re.test(t.id));
+  const list = [new MoveTool(app), ...pick(/^marquee/), ...pick(/^crop/), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), ...pick(/^(gradient|bucket)/), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
   return Object.fromEntries(list.map((t) => [t.id, t]));
 }

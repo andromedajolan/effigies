@@ -2,6 +2,8 @@
 import { h, clamp, debounce, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb, fmtBytes, ctxOf, makeCanvas, toast } from './util.js';
 import { BLEND_GROUPS } from './blend.js';
 import { compose, releaseCanvas } from './render.js';
+import { openDialog } from './dialogs.js';
+import { brushTip, BRUSH_DEFAULTS, ERASER_DEFAULTS, TIPS } from './tools.js';
 
 const DEFAULT_SWATCHES = ['#000000', '#1a1a1a', '#333333', '#4d4d4d', '#666666', '#808080', '#999999', '#b3b3b3', '#cccccc', '#e6e6e6', '#ffffff',
   '#ff0000', '#ff4d00', '#ff8000', '#ffbf00', '#ffff00', '#bfff00', '#80ff00', '#00ff00', '#00ff80', '#00ffbf', '#00ffff', '#00bfff', '#0080ff', '#0000ff', '#4000ff', '#8000ff', '#bf00ff', '#ff00ff', '#ff0080',
@@ -149,6 +151,18 @@ function layersPanel(app) {
     return c;
   }
 
+  const mthumbs = new Map();
+  function maskThumb(l, d) {
+    let t = mthumbs.get(l.id);
+    if (t && t.ver === l.mver && t.w === d.w && t.h === d.h && t.maskId === l.mask) return t.canvas;
+    const w = d.w >= d.h ? 34 : Math.max(8, Math.round(34 * d.w / d.h)), hh = d.h > d.w ? 30 : Math.max(8, Math.round(30 * d.h / d.w));
+    const c = t ? t.canvas : makeCanvas(w, hh, false); c.width = w; c.height = hh;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, hh);
+    const s = w / d.w, m = l.mask; g.imageSmoothingQuality = 'high';
+    g.drawImage(m.canvas, (l.x + m.x) * s, (l.y + m.y) * s, m.canvas.width * s, m.canvas.height * s);
+    mthumbs.set(l.id, { ver: l.mver, canvas: c, w: d.w, h: d.h, maskId: l.mask });
+    return c;
+  }
   function dropZone(e, row, l) {
     const r = row.getBoundingClientRect(), f = (e.clientY - r.top) / r.height;
     if (l.type === 'group' && f > 0.28 && f < 0.72) return 'into';
@@ -173,7 +187,13 @@ function layersPanel(app) {
     const nm = h('div', { class: 'nm', title: l.name }, l.name);
     nm.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(l, nm); });
     const lk = h('span', { class: 'lk' }, [l.lockAll && '🔒', !l.lockAll && l.lockTrans && '▨', !l.lockAll && l.lockPix && '✎', !l.lockAll && l.lockPos && '✥'].filter(Boolean).join(''));
-    row.append(twist, eye, th, nm, lk);
+    if (l.type === 'raster' && l.mask) {
+      th.classList.toggle('target', !l.editMask);
+      th.addEventListener('click', (e) => { if (l.editMask) { l.editMask = false; d.changed({ skipRender: true, tree: true }); } });
+      const mt = h('div', { class: 'thumb mask' + (l.editMask ? ' target' : '') + (l.maskOn ? '' : ' off'), title: 'Layer mask (click to paint on it, Shift-click to disable)' }, maskThumb(l, d));
+      mt.addEventListener('click', (e) => { e.stopPropagation(); if (d.activeId !== l.id) d.activeId = l.id; if (e.shiftKey) d.toggleMask(l); else { l.editMask = true; d.changed({ skipRender: true, tree: true }); } });
+      row.append(twist, eye, th, mt, nm, lk);
+    } else row.append(twist, eye, th, nm, lk);
     row.addEventListener('click', () => { if (d.activeId !== l.id) { d.activeId = l.id; d.changed({ skipRender: true, tree: true }); } });
     row.addEventListener('dragstart', (e) => { e.dataTransfer.setData('application/x-effigies-layer', JSON.stringify({ docId: d.id, layerId: l.id })); e.dataTransfer.effectAllowed = 'copyMove'; });
     row.addEventListener('dragover', (e) => {
@@ -208,7 +228,7 @@ function layersPanel(app) {
     if (!d) { for (const el of [blendSel, op, opN, fl, flN, ...lockBtns]) el.disabled = true; return; }
     const walk = (arr, depth) => { for (let i = arr.length - 1; i >= 0; i--) { list.append(buildRow(arr[i], depth, d)); if (arr[i].type === 'group' && !arr[i].collapsed) walk(arr[i].children, depth + 1); } };
     walk(d.layers, 0);
-    const alive = new Set(d.allLayers().map((x) => x.id)); for (const k of thumbs.keys()) if (!alive.has(k)) thumbs.delete(k);
+    const alive = new Set(d.allLayers().map((x) => x.id)); for (const k of thumbs.keys()) if (!alive.has(k)) thumbs.delete(k); for (const k of mthumbs.keys()) if (!alive.has(k)) mthumbs.delete(k);
     const l = d.active; const dis = !l;
     for (const el of [blendSel, op, opN, fl, flN, ...lockBtns]) el.disabled = dis;
     if (l) {
@@ -225,6 +245,7 @@ function layersPanel(app) {
   list.addEventListener('keydown', (e) => { if ((e.key === 'Delete' || e.key === 'Backspace') && app.doc && app.doc.active) { e.preventDefault(); app.doc.deleteLayer(); } });
 
   const foot = h('div', { class: 'lay-foot' },
+    h('button', { class: 'btn icon', title: 'Add layer mask (from the selection if there is one)', 'aria-label': 'Add layer mask', onclick: () => { const d = app.doc; if (d) app.actions.maskAdd(d.sel ? 'revealSel' : 'reveal'); } }, '◐'),
     h('button', { class: 'btn icon', title: 'New group', 'aria-label': 'New group', onclick: () => app.doc && app.doc.newLayer({ type: 'group' }) }, '📁'),
     h('button', { class: 'btn icon', title: 'New layer (Ctrl+Shift+N)', 'aria-label': 'New layer', onclick: () => app.newLayer() }, '＋'),
     h('button', { class: 'btn icon', title: 'Delete layer', 'aria-label': 'Delete layer', onclick: () => app.doc && app.doc.deleteLayer() }, '🗑'));
@@ -257,6 +278,94 @@ function historyPanel(app) {
   return { body: h('div', null, list, info), refresh };
 }
 
+
+// ───────────── Brush ─────────────
+const BUILTIN_BRUSHES = [
+  { name: 'Soft Round', size: 40, hardness: 0, opacity: 100, flow: 100, spacing: 12 },
+  { name: 'Hard Round', size: 24, hardness: 100, opacity: 100, flow: 100, spacing: 10 },
+  { name: 'Airbrush', size: 90, hardness: 0, opacity: 100, flow: 18, spacing: 6 },
+  { name: 'Pencil', size: 4, hardness: 100, opacity: 100, flow: 100, spacing: 8, sizeJitter: 8 },
+  { name: 'Marker', size: 28, hardness: 95, opacity: 100, flow: 100, spacing: 8, tip: 'square', roundness: 45, angle: 40 },
+  { name: 'Chalk', size: 36, hardness: 70, opacity: 100, flow: 85, spacing: 18, tip: 'chalk', scatter: 6, opacityJitter: 30 },
+  { name: 'Charcoal', size: 60, hardness: 40, opacity: 100, flow: 60, spacing: 14, tip: 'chalk', roundness: 60, angle: 20, opacityJitter: 40, sizeJitter: 15 },
+  { name: 'Sparkle', size: 22, hardness: 100, opacity: 100, flow: 100, spacing: 140, tip: 'star', scatter: 160, sizeJitter: 70, opacityJitter: 30, angle: 15 },
+];
+const BRUSH_KEYS = ['size', 'hardness', 'opacity', 'flow', 'spacing', 'roundness', 'angle', 'scatter', 'sizeJitter', 'opacityJitter', 'tip'];
+
+function brushPanel(app) {
+  const target = () => { const t = app.tool; return t && (t.id === 'brush' || t.id === 'eraser') ? t : app.tools.brush; };
+  const O = () => { const t = target(); return { ...BRUSH_DEFAULTS, ...app.opts(t.id, t.defaults) }; };
+  const raw = () => { const t = target(); return app.opts(t.id, t.defaults); };
+  const prev = h('canvas', { width: 220, height: 56, class: 'brush-prev' });
+  function drawPreview() {
+    const o = O(), g = prev.getContext('2d'), W = prev.width, H = prev.height;
+    g.clearRect(0, 0, W, H);
+    const k = Math.min(1, 40 / Math.max(1, o.size)), size = Math.max(1, o.size * k);
+    const tip = brushTip(size, o.hardness, '#d9d9d9', o.tip);
+    let seed = 7; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const sp = Math.max(1, size * (o.spacing / 100));
+    g.save();
+    for (let x = 14; x < W - 14; x += sp) {
+      const t = (x - 14) / (W - 28), y = H / 2 + Math.sin(t * 6.28 * 1.0) * (H * 0.25), press = Math.sin(t * Math.PI) * 0.8 + 0.2;
+      const sc = (o.pressure ? press : 1) * (1 - (o.sizeJitter / 100) * rnd());
+      const px = x + (rnd() - 0.5) * 2 * (o.scatter / 100) * size, py = y + (rnd() - 0.5) * 2 * (o.scatter / 100) * size;
+      g.globalAlpha = (o.flow / 100) * (1 - (o.opacityJitter / 100) * rnd());
+      g.save(); g.translate(px, py); g.rotate(o.angle * Math.PI / 180); g.scale(sc, sc * o.roundness / 100); g.drawImage(tip, -tip.width / 2, -tip.height / 2); g.restore();
+    }
+    g.restore();
+  }
+  const rows = [];
+  const ctl = (key, label, min, max, suffix = '', slider = null) => {
+    const n = h('input', { type: 'number', min, max, 'aria-label': label }), r = h('input', { type: 'range', min: slider ? slider[0] : min, max: slider ? slider[1] : max, 'aria-label': label + ' slider' });
+    const set = (v) => { const o = raw(); o[key] = clamp(Math.round(v), min, max); n.value = o[key]; r.value = Math.min(o[key], +r.max); app.savePrefs(); drawPreview(); app.emit('toolopts'); app.vp && app.vp.drawOverlay(); };
+    r.addEventListener('input', () => set(+r.value)); n.addEventListener('change', () => set(+n.value || min));
+    const row = h('div', { class: 'brow' }, h('span', { class: 'lbl' }, label), r, h('span', { class: 'pct' }, n, suffix));
+    rows.push(() => { const v = O()[key]; n.value = v; r.value = Math.min(v, +r.max); });
+    return row;
+  };
+  const tipSel = h('select', { 'aria-label': 'Tip shape' }, TIPS.map(([v, l]) => h('option', { value: v }, l)));
+  tipSel.addEventListener('change', () => { raw().tip = tipSel.value; app.savePrefs(); drawPreview(); });
+  rows.push(() => { tipSel.value = O().tip; });
+  const press = h('input', { type: 'checkbox' });
+  press.addEventListener('change', () => { raw().pressure = press.checked; app.savePrefs(); drawPreview(); });
+  rows.push(() => { press.checked = !!O().pressure; });
+  const presetBox = h('div', { class: 'presets' });
+  const userPresets = () => (app.prefs.brushPresets ||= []);
+  function applyPreset(p) { const o = raw(); Object.assign(o, { ...BRUSH_DEFAULTS, ...(target().erase ? { size: 60 } : {}) }, Object.fromEntries(BRUSH_KEYS.filter((k) => k in p).map((k) => [k, p[k]]))); app.savePrefs(); refresh(); app.emit('toolopts'); app.vp && app.vp.drawOverlay(); }
+  function drawPresets() {
+    presetBox.textContent = '';
+    const mk = (p, user) => {
+      const c = h('canvas', { width: 64, height: 22 }), g = c.getContext('2d');
+      const o = { ...BRUSH_DEFAULTS, ...p }, k = Math.min(1, 14 / Math.max(1, o.size)), size = Math.max(1, o.size * k), tip = brushTip(size, o.hardness, '#dddddd', o.tip), sp = Math.max(1, size * o.spacing / 100);
+      let seed = 3; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+      for (let x = 6; x < 58; x += Math.max(sp, 1.2)) { const y = 11 + Math.sin((x - 6) / 52 * 6.28) * 4; g.globalAlpha = (o.flow / 100) * (1 - o.opacityJitter / 100 * rnd()); g.save(); g.translate(x + (rnd() - .5) * o.scatter / 100 * size, y); g.rotate(o.angle * Math.PI / 180); g.scale(1 - o.sizeJitter / 100 * rnd(), o.roundness / 100); g.drawImage(tip, -tip.width / 2, -tip.height / 2); g.restore(); }
+      const b = h('button', { class: 'preset', title: p.name + (user ? ' (right-click to delete)' : '') }, c, h('span', null, p.name));
+      b.addEventListener('click', () => applyPreset(p));
+      if (user) b.addEventListener('contextmenu', (e) => { e.preventDefault(); const i = userPresets().indexOf(p); if (i >= 0) { userPresets().splice(i, 1); app.savePrefs(); drawPresets(); } });
+      return b;
+    };
+    for (const p of BUILTIN_BRUSHES) presetBox.append(mk(p, false));
+    for (const p of userPresets()) presetBox.append(mk(p, true));
+  }
+  const save = h('button', { class: 'btn small', title: 'Save the current brush settings as a preset', onclick: async () => {
+    const inp = h('input', { type: 'text', value: 'My brush' });
+    const name = await openDialog({ title: 'Save Brush Preset', body: h('div', { class: 'fld' }, h('label', null, 'Name'), inp), collect: () => inp.value.trim() }); if (!name) return;
+    const o = O(); userPresets().push({ name, ...Object.fromEntries(BRUSH_KEYS.map((k) => [k, o[k]])) }); app.savePrefs(); drawPresets(); toast('Brush preset saved.');
+  } }, 'Save preset');
+  const reset = h('button', { class: 'btn small', onclick: () => { applyPreset({}); } }, 'Reset');
+  const body = h('div', { class: 'brush-panel' }, prev,
+    h('div', { class: 'brow' }, h('span', { class: 'lbl' }, 'Tip'), tipSel),
+    ctl('size', 'Size', 1, 5000, 'px', [1, 300]), ctl('hardness', 'Hardness', 0, 100, '%'), ctl('spacing', 'Spacing', 1, 400, '%', [1, 200]),
+    ctl('roundness', 'Roundness', 5, 100, '%'), ctl('angle', 'Angle', -180, 180, '°'), ctl('scatter', 'Scatter', 0, 500, '%', [0, 300]),
+    ctl('sizeJitter', 'Size jitter', 0, 100, '%'), ctl('opacityJitter', 'Opacity jitter', 0, 100, '%'),
+    h('label', { class: 'brow check' }, press, 'Pen pressure controls size'),
+    h('div', { class: 'brow' }, save, reset), presetBox);
+  function refresh() { rows.forEach((f) => f()); drawPreview(); }
+  app.on('tool', refresh); app.on('toolopts', refresh);
+  drawPresets(); refresh();
+  return { body, refresh };
+}
+
 export function buildDock(app) {
   const dock = document.getElementById('dock');
   const colorTabs = h('span', { class: 'tabsel' });
@@ -267,10 +376,12 @@ export function buildDock(app) {
   const pColor = panel('color', '', { head: colorTabs, body: cbody }, app);
   const pPrev = panel('preview', 'Preview', { body: previewPanel(app) }, app);
   const lay = layersPanel(app);
+  const br = brushPanel(app);
+  const pBr = panel('brush', 'Brush', { body: br.body, collapsed: true }, app);
   const pLay = panel('layers', 'Layers', { grow: true, body: lay.body }, app);
   const his = historyPanel(app);
   const pHis = panel('history', 'History', { body: his.body, collapsed: true }, app);
-  dock.append(pColor.el, pPrev.el, pLay.el, pHis.el);
+  dock.append(pColor.el, pPrev.el, pBr.el, pLay.el, pHis.el);
   lay.refresh(); his.refresh();
-  return { panels: { color: pColor.el, preview: pPrev.el, layers: pLay.el, history: pHis.el }, refreshLayers: lay.refresh, refreshHistory: his.refresh };
+  return { panels: { color: pColor.el, preview: pPrev.el, brush: pBr.el, layers: pLay.el, history: pHis.el }, refreshLayers: lay.refresh, refreshHistory: his.refresh };
 }

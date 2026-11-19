@@ -60,7 +60,7 @@ export function buildMenus(app) {
       { label: 'Fill with Foreground Color', key: 'Alt+Backspace', run: () => A.fill('fg'), enabled: lay },
       { label: 'Fill with Background Color', key: 'Ctrl+Backspace', run: () => A.fill('bg'), enabled: lay },
       '---',
-      { label: 'Free Transform', key: 'Ctrl+T', stage: 2 },
+      { label: 'Free Transform', key: 'Ctrl+T', stage: 3 },
       '---',
       { label: 'Preferences…', run: A.prefs },
     ]],
@@ -71,7 +71,7 @@ export function buildMenus(app) {
       { label: 'Image Rotation', enabled: has, sub: [
         { label: '180°', run: () => A.rotate('r180') }, { label: '90° Clockwise', run: () => A.rotate('cw') }, { label: '90° Counter Clockwise', run: () => A.rotate('ccw') },
         '---', { label: 'Flip Canvas Horizontal', run: () => A.rotate('fliph') }, { label: 'Flip Canvas Vertical', run: () => A.rotate('flipv') }] },
-      { label: 'Crop', stage: 2 },
+      { label: 'Crop to Selection', run: A.cropToSel, enabled: () => has() && !!app.doc.sel },
       '---',
       { label: 'Duplicate Document', run: A.duplicateDoc, enabled: has },
     ]],
@@ -82,7 +82,18 @@ export function buildMenus(app) {
       { label: 'Duplicate Layer', run: A.duplicateLayer, enabled: lay },
       { label: 'Delete Layer', run: A.deleteLayer, enabled: lay },
       '---',
-      { label: 'Layer Style', stage: 3 }, { label: 'Layer Mask', stage: 2 }, { label: 'Create Clipping Mask', stage: 3 },
+      { label: 'Layer Style', stage: 3 },
+      { label: 'Layer Mask', enabled: lay, sub: [
+        { label: 'Reveal All', run: () => A.maskAdd('reveal'), enabled: () => lay() && lay().type === 'raster' && !lay().mask },
+        { label: 'Hide All', run: () => A.maskAdd('hide'), enabled: () => lay() && lay().type === 'raster' && !lay().mask },
+        { label: 'Reveal Selection', run: () => A.maskAdd('revealSel'), enabled: () => lay() && lay().type === 'raster' && !lay().mask && !!app.doc.sel },
+        { label: 'Hide Selection', run: () => A.maskAdd('hideSel'), enabled: () => lay() && lay().type === 'raster' && !lay().mask && !!app.doc.sel },
+        '---',
+        { label: () => (lay() && lay().maskOn === false ? 'Enable' : 'Disable'), run: A.maskToggle, enabled: () => lay() && !!lay().mask },
+        { label: 'Invert Mask', run: A.maskInvert, enabled: () => lay() && !!lay().mask },
+        { label: 'Apply Layer Mask', run: A.maskApply, enabled: () => lay() && !!lay().mask },
+        { label: 'Delete', run: A.maskDelete, enabled: () => lay() && !!lay().mask }] },
+      { label: 'Create Clipping Mask', stage: 3 },
       '---',
       { label: 'Group Layers', key: 'Ctrl+G', run: A.group, enabled: lay },
       { label: 'Ungroup Layers', key: 'Ctrl+Shift+G', run: A.ungroup, enabled: () => lay() && lay().type === 'group' },
@@ -95,7 +106,16 @@ export function buildMenus(app) {
       { label: 'Flatten Image', run: A.flatten, enabled: has },
     ]],
     ['Type', () => [{ label: 'Type tool and lettering', stage: 3 }]],
-    ['Select', () => [{ label: 'Selections', stage: 2 }]],
+    ['Select', () => [
+      { label: 'All', key: 'Ctrl+A', run: A.selectAll, enabled: has },
+      { label: 'Deselect', key: 'Ctrl+D', run: A.deselect, enabled: () => has() && !!app.doc.sel },
+      { label: 'Reselect', key: 'Ctrl+Shift+D', run: A.reselect, enabled: () => has() && !app.doc.sel && !!app.doc.lastSel },
+      { label: 'Inverse', key: 'Ctrl+Shift+I', run: A.inverseSel, enabled: has },
+      '---',
+      { label: 'Feather…', run: A.featherSel, enabled: () => has() && !!app.doc.sel },
+      { label: 'Modify', enabled: () => has() && !!app.doc.sel, sub: [
+        { label: 'Expand…', run: () => A.growSel(1) }, { label: 'Contract…', run: () => A.growSel(-1) }] },
+    ]],
     ['Filter', () => [{ label: 'Filters', stage: 4 }]],
     ['View', () => [
       { label: 'Zoom In', key: 'Ctrl++', run: () => A.zoom(1), enabled: has }, { label: 'Zoom Out', key: 'Ctrl+−', run: () => A.zoom(-1), enabled: has },
@@ -105,10 +125,10 @@ export function buildMenus(app) {
       { label: 'Thirds Guides', checked: () => app.prefs.guideThirds, run: () => A.toggleGuide('guideThirds') },
       { label: 'Safe Margin Guide (10%)', checked: () => app.prefs.guideSafe, run: () => A.toggleGuide('guideSafe') },
       '---',
-      { label: 'Rulers and Guides', stage: 2 },
+      { label: 'Rulers and Guides', stage: 3 },
     ]],
     ['Window', () => [
-      ...['color', 'preview', 'layers', 'history'].map((id) => ({ label: { color: 'Color / Swatches', preview: 'Preview', layers: 'Layers', history: 'History' }[id], checked: () => !app.dockEls[id].classList.contains('collapsed'), run: () => A.togglePanel(id) })),
+      ...['color', 'preview', 'brush', 'layers', 'history'].map((id) => ({ label: { color: 'Color / Swatches', preview: 'Preview', brush: 'Brush', layers: 'Layers', history: 'History' }[id], checked: () => !app.dockEls[id].classList.contains('collapsed'), run: () => A.togglePanel(id) })),
       '---',
       { label: 'Hide / Show All Panels', key: 'Tab', run: A.togglePanels },
       { label: 'Reset Panels', run: A.resetPanels },
@@ -123,6 +143,7 @@ export function buildMenus(app) {
     ]],
   ];
   const bar = $('#menubar'); bar.textContent = '';
+  bar.append(h('a', { class: 'menu-top ianua', href: '/', title: 'Back to the Ianua launcher' }, '← Ianua'));
   for (const [name, items] of MENUS) {
     const top = h('div', { class: 'menu-top', role: 'menuitem' }, name);
     const show = () => { closeMenus(); top.classList.add('open'); openTop = top; const r = top.getBoundingClientRect(); popup(items(), r.left, r.bottom, app); };
@@ -153,7 +174,7 @@ export function buildToolbox(app) {
   for (const t of Object.values(app.tools)) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t); }
   app.toolGroups = groups; app.groupCurrent = app.groupCurrent || {};
   const btns = new Map();
-  const spacerAfter = new Set(['move', 'eraser', 'eyedropper']);
+  const spacerAfter = new Set(['move', 'crop', 'gradient', 'eyedropper']);
   for (const [g, list] of groups) {
     const cur = list.find((t) => t.id === app.groupCurrent[g]) || list[0];
     const b = h('button', { class: 'tool' + (list.length > 1 ? ' has-group' : ''), 'data-group': g, title: `${cur.name} (${cur.key.toUpperCase()})`, 'aria-label': cur.name, html: cur.icon });
@@ -200,7 +221,7 @@ export function buildOptionsBar(app) {
   function render() {
     const t = app.tool; bar.textContent = '';
     bar.append(h('div', { class: 'tname' }, h('span', { html: t.icon }), t.name));
-    const o = app.opts(t.id, t.defaults);
+    const o = app.opts(t.optKey || t.id, t.defaults);
     for (const d of t.options || []) {
       if (d.type === 'button') { bar.append(h('button', { class: 'btn small', onclick: () => d.run(app) }, d.label)); continue; }
       if (d.type === 'check') {

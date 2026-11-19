@@ -2,6 +2,7 @@
 import { h, $, toast, debounce, clamp, makeCanvas, ctxOf, canvasToBlob, download, fmtBytes, uid } from './util.js';
 import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers } from './doc.js';
 import { Viewport } from './viewport.js';
+import { selectAll, invertSel, featherSel, growSel, selRect } from './select.js';
 import { createTools } from './tools.js';
 import { buildDock } from './panels.js';
 import { buildMenus, buildAppbar, buildToolbox, buildOptionsBar, buildTabs, buildStatusbar, closeMenus } from './chrome.js';
@@ -10,7 +11,7 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.1.1'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.2.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -260,6 +261,32 @@ A.rotate = (k) => { const d = app.doc; if (d) d.transformImage(k); };
 
 // layers
 A.newLayer = () => { const d = app.doc; if (d) d.newLayer(); };
+// selection
+A.selectAll = () => { const d = app.doc; if (d) d.setSelection(selectAll(d.w, d.h), 'Select All'); };
+A.deselect = () => { const d = app.doc; if (d && d.sel) d.setSelection(null, 'Deselect'); };
+A.reselect = () => { const d = app.doc; if (d && !d.sel && d.lastSel) d.setSelection(d.lastSel, 'Reselect'); };
+A.inverseSel = () => { const d = app.doc; if (!d) return; const n = invertSel(d.sel, d.w, d.h); if (!d.sel && !n) return; d.setSelection(n, 'Select Inverse'); };
+A.featherSel = async () => {
+  const d = app.doc; if (!d || !d.sel) return;
+  const inp = h('input', { type: 'number', value: 5, min: 0, max: 250, step: 1 });
+  const v = await openDialog({ title: 'Feather Selection', body: h('div', { class: 'fld' }, h('label', null, 'Feather Radius'), h('span', { class: 'inline' }, inp, 'px')), collect: () => Number(inp.value) });
+  if (v) d.setSelection(featherSel(d.sel, v, d.w, d.h), 'Feather Selection');
+};
+A.growSel = async (dir) => {
+  const d = app.doc; if (!d || !d.sel) return;
+  const inp = h('input', { type: 'number', value: 4, min: 1, max: 100, step: 1 });
+  const v = await openDialog({ title: dir > 0 ? 'Expand Selection' : 'Contract Selection', body: h('div', { class: 'fld' }, h('label', null, dir > 0 ? 'Expand By' : 'Contract By'), h('span', { class: 'inline' }, inp, 'px')), collect: () => Number(inp.value) });
+  if (v) d.setSelection(growSel(d.sel, dir * v, d.w, d.h), dir > 0 ? 'Expand Selection' : 'Contract Selection');
+};
+A.cropToSel = () => { const d = app.doc; if (!d || !d.sel) { toast('Make a selection first, or use the Crop tool.'); return; } const r = selRect(d.sel); d.cropTo({ x: Math.max(0, r.x), y: Math.max(0, r.y), w: r.w, h: r.h }, false); };
+A.clearSel = () => { const d = app.doc; if (d && d.active) { if (!d.clearLayer(d.active)) toast('That layer cannot be cleared (group or locked).'); } };
+// masks
+A.maskAdd = (kind) => { const d = app.doc, L = d && d.active; if (!L || L.type !== 'raster') { toast('Select a regular layer first.'); return; } if (L.mask) { toast('That layer already has a mask.'); return; } d.addMask(L, kind); app.emit('docchange', { tree: true }); };
+A.maskDelete = () => { const d = app.doc; if (d && d.active && d.active.mask) { d.deleteMask(d.active, false); } };
+A.maskApply = () => { const d = app.doc; if (d && d.active && d.active.mask) { d.deleteMask(d.active, true); } };
+A.maskInvert = () => { const d = app.doc; if (d && d.active && d.active.mask) d.invertMask(d.active); };
+A.maskToggle = () => { const d = app.doc; if (d && d.active && d.active.mask) d.toggleMask(d.active); };
+A.editTarget = (mask) => { const d = app.doc, L = d && d.active; if (!L) return; L.editMask = !!(mask && L.mask); app.emit('docchange', { tree: true, skipRender: true }); };
 A.newGroup = () => { const d = app.doc; if (d) d.newLayer({ type: 'group' }); };
 A.viaCopy = () => { const d = app.doc; if (d && d.active) d.duplicateLayer(d.active, ''); };
 A.duplicateLayer = () => { const d = app.doc; if (d && d.active) d.duplicateLayer(); };
@@ -287,7 +314,7 @@ A.toggleGuide = (k, cycle) => {
 };
 A.togglePanel = (id) => app.dockEls[id].setCollapsed(!app.dockEls[id].classList.contains('collapsed'));
 A.togglePanels = () => document.body.classList.toggle('panels-hidden');
-A.resetPanels = () => { for (const [id, el] of Object.entries(app.dockEls)) el.setCollapsed(id === 'history'); document.body.classList.remove('panels-hidden'); };
+A.resetPanels = () => { for (const [id, el] of Object.entries(app.dockEls)) el.setCollapsed(id === 'history' || id === 'brush'); document.body.classList.remove('panels-hidden'); };
 A.setTheme = (t) => applyTheme(t, true);
 A.swapColors = () => { const f = app.fg; app.fg = app.bg; app.bg = f; app.savePrefs(); app.emit('color'); };
 A.resetColors = () => { app.fg = '#000000'; app.bg = '#ffffff'; app.savePrefs(); app.emit('color'); };
@@ -343,7 +370,9 @@ document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]')) return;
   if (isTyping(e.target)) return;
   const mod = e.ctrlKey || e.metaKey, k = e.key, lk = k.length === 1 ? k.toLowerCase() : k;
-  if (k === 'Escape') { closeMenus(); return; }
+  if (k === 'Escape') { closeMenus(); if (app.tool && app.tool.cancel && app.tool.box) app.tool.cancel(); return; }
+  if (k === 'Enter' && app.tool && app.tool.enter && app.tool.enter()) { e.preventDefault(); return; }
+  if (k === 'Delete' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); A.clearSel(); return; }
   if (k === 'Tab') { e.preventDefault(); A.togglePanels(); return; }
   if (k === ' ' && !mod) { e.preventDefault(); if (!e.repeat && app.vp) { app.vp.space = true; app.refreshCursor(); } return; }
   if (mod) {
@@ -356,6 +385,7 @@ document.addEventListener('keydown', (e) => {
       '=': () => A.zoom(1), '+': () => A.zoom(1), '-': () => A.zoom(-1), _: () => A.zoom(-1), '0': A.fit, '1': A.actual,
       '[': () => A.arrange(sh ? 'back' : 'backward'), ']': () => A.arrange(sh ? 'front' : 'forward'), '{': () => A.arrange('back'), '}': () => A.arrange('front'),
       Backspace: () => A.fill('bg'),
+      a: () => A.selectAll(), d: () => (sh ? A.reselect() : A.deselect()), i: () => { if (sh) A.inverseSel(); },
     };
     if (lk === 'v') return; // let the paste event fire
     const fn = map[lk] || map[k];

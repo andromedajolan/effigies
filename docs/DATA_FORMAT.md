@@ -6,9 +6,9 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 | Where | Key | Content |
 |---|---|---|
-| localStorage | `effigies.prefs` | JSON preferences |
+| localStorage | `effigies.prefs` | JSON preferences (includes `brushPresets`, your saved brushes) |
 | localStorage | `studio.theme` | `"dark"` or `"gray"` (**shared** with the suite; `"light"` is read as gray) |
-| IndexedDB | `effigies-db` | stores `docs`, `blobs`, `meta` (autosave and open-tab session) |
+| IndexedDB | `effigies-db` | stores `docs`, `blobs`, `meta` (autosave and open-tab session; layer and mask pixels are PNG blobs) |
 | Cache Storage | `effigies-cache-<version>` | offline app shell |
 
 `studio.theme` is the only key shared with other apps.
@@ -49,10 +49,17 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
   "lock": { "transparentPixels": false, "imagePixels": false, "position": false, "all": false },
   "x": 0, "y": 0, "width": 0, "height": 0,
   "image": "data:image/png;base64,... or null",
+  "mask": {
+    "x": 0, "y": 0, "width": 0, "height": 0,
+    "enabled": true,
+    "image": "data:image/png;base64,..."
+  },
   "collapsed": false,
   "children": []
 }
 ```
+
+- `mask` is optional (raster layers only). Its `image` is a PNG where the **alpha channel is how much of the layer is hidden** (0 = fully shown, 255 = fully hidden); the colour channels are always black. `x`, `y` are relative to the layer's own `x`, `y`, so the mask moves with its layer. Outside the mask rectangle the layer is fully shown. `enabled: false` means the mask is kept but not applied.
 
 - `image` is the layer's pixel rectangle at offset (`x`, `y`) in document space; `null` when empty. Groups have no `image`, but have `children` (bottom to top) and `collapsed`.
 - `blend` is one of 27 mode ids (normal, dissolve, darken, multiply, colorBurn, linearBurn, darkerColor, lighten, screen, colorDodge, linearDodge, lighterColor, overlay, softLight, hardLight, vividLight, linearLight, pinLight, hardMix, difference, exclusion, subtract, divide, hue, saturation, color, luminosity).
@@ -61,7 +68,7 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `version` is an integer. Additive changes (new optional fields) keep the version. Breaking changes bump it.
 - Importers must ignore unknown fields and refuse a newer `version` with a clear message.
-- Later stages add optional layer fields (masks, styles, adjustments, text) without bumping the version.
+- Stage 2 added the optional `mask` field (still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
 
 ## Size note
 

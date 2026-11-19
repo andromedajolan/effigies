@@ -35,11 +35,15 @@ function treeRecord(docId, list) {
   return list.map((L) => {
     const m = layerMeta(L);
     if (L.type === 'group') m.children = treeRecord(docId, L.children);
-    else if (L.canvas && L.savedVer) m.blob = blobKey(docId, L);
+    else {
+      if (L.canvas && L.savedVer) m.blob = blobKey(docId, L);
+      if (L.mask && L.savedMver) m.mask = { ...m.mask, blob: `${docId}|${L.id}|m${L.savedMver}` };
+      else m.mask = null;
+    }
     return m;
   });
 }
-function collectKeys(list, out) { for (const m of list) { if (m.blob) out.add(m.blob); if (m.children) collectKeys(m.children, out); } }
+function collectKeys(list, out) { for (const m of list) { if (m.blob) out.add(m.blob); if (m.mask && m.mask.blob) out.add(m.mask.blob); if (m.children) collectKeys(m.children, out); } }
 
 let chain = Promise.resolve();
 /** Save one document (serialized so two saves never overlap). Resolves when durable. */
@@ -50,6 +54,11 @@ export function saveDoc(doc) {
     const db = await open();
     // 1. layer pixels (only layers that changed since their last save)
     for (const L of doc.allLayers()) {
+      if (L.type === 'raster' && L.mask && L.savedMver !== L.mver) {
+        const v = L.mver, blob = await canvasToBlob(L.mask.canvas);
+        const tx = db.transaction('blobs', 'readwrite'); tx.objectStore('blobs').put(blob, `${doc.id}|${L.id}|m${v}`); await txDone(tx);
+        L.savedMver = v;
+      }
       if (L.type !== 'raster' || !L.canvas) continue;
       if (L.savedVer === L.ver && L.savedCanvasBytes === canvasBytes(L.canvas)) continue;
       const v = L.ver;
@@ -92,10 +101,19 @@ export async function deleteDocStored(id) {
 async function layersFromRecord(db, list) {
   const out = [];
   for (const m of list) {
-    const L = new Layer({ ...m, canvas: null, children: null });
+    const L = new Layer({ ...m, canvas: null, children: null, mask: null });
     L.id = m.id; L.type = m.type; if (m.type === 'group') L.children = [];
     if (m.type === 'group') L.children = await layersFromRecord(db, m.children || []);
-    else if (m.blob) {
+    else {
+      if (m.mask && m.mask.blob) {
+        const mb = await wrap(db.transaction('blobs').objectStore('blobs').get(m.mask.blob));
+        if (mb) {
+          const bmp = await createImageBitmap(mb), c = makeCanvas(bmp.width, bmp.height); ctxOf(c).drawImage(bmp, 0, 0); bmp.close && bmp.close();
+          L.mask = { canvas: c, x: m.mask.x, y: m.mask.y }; L.mver = L.savedMver = Number(m.mask.blob.split('|m').pop());
+        }
+      }
+    }
+    if (m.type !== 'group' && m.blob) {
       const blob = await wrap(db.transaction('blobs').objectStore('blobs').get(m.blob));
       if (blob) {
         const bmp = await createImageBitmap(blob);

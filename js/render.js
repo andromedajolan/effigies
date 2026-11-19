@@ -51,7 +51,8 @@ function drawRaster(L, g, tf, W, H, live, org) {
   const rw = x1 - x0, rh = y1 - y0;
   if (rw <= 0 || rh <= 0) return;
   const smooth = z < 1;
-  if (L.blend === 'normal' && !hasLive) {
+  const masked = !!(L.mask && L.maskOn);
+  if (L.blend === 'normal' && !hasLive && !masked) {
     g.globalAlpha = eff;
     g.setTransform(z, 0, 0, z, tf.tx, tf.ty);
     g.imageSmoothingEnabled = smooth; if (smooth) g.imageSmoothingQuality = 'high';
@@ -67,8 +68,14 @@ function drawRaster(L, g, tf, W, H, live, org) {
   if (hasLive) {
     sg.globalAlpha = live.opacity;
     sg.globalCompositeOperation = live.erase ? 'destination-out' : (L.lockTrans ? 'source-atop' : 'source-over');
-    sg.drawImage(live.canvas, live.ox, live.oy);
+    sg.drawImage(live.show || live.canvas, live.ox, live.oy);
     sg.globalAlpha = 1; sg.globalCompositeOperation = 'source-over';
+  }
+  if (masked) {   // mask canvas stores how much is hidden (alpha); outside the mask the layer is fully visible
+    sg.globalCompositeOperation = 'destination-out';
+    sg.imageSmoothingEnabled = smooth; if (smooth) sg.imageSmoothingQuality = 'high';
+    sg.drawImage(L.mask.canvas, L.x + L.mask.x, L.y + L.mask.y);
+    sg.globalCompositeOperation = 'source-over';
   }
   sg.setTransform(1, 0, 0, 1, 0, 0);
   blendOnto(g, S, x0, y0, rw, rh, L.blend, eff, org.x, org.y);

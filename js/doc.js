@@ -1,8 +1,9 @@
 // Document model: layers, groups, history, and every operation that changes them.
-import { uid, makeCanvas, ctxOf, rectUnion } from './util.js';
+import { uid, makeCanvas, ctxOf, rectUnion, rectIntersect } from './util.js';
 import { compose, renderFull, releaseCanvas } from './render.js';
 
 export const canvasBytes = (c) => (c ? c.width * c.height * 4 : 0);
+export const selBytes = (s) => (s ? canvasBytes(s.canvas) : 0);
 
 export class Layer {
   constructor(o = {}) {
@@ -18,10 +19,28 @@ export class Layer {
     this.canvas = o.canvas || null;
     this.children = this.type === 'group' ? (o.children || []) : null;
     this.collapsed = !!o.collapsed;
+    this.mask = o.mask || null;          // {canvas, x, y}: x,y are relative to the layer origin; alpha = how much is HIDDEN
+    this.maskOn = o.maskOn ?? true;
+    this.editMask = false;               // transient: paint target is the mask
+    this.mver = 1;
     this.ver = 1;          // bumps whenever pixels change (autosave watches this)
     this.thumbDirty = true;
   }
   touch() { this.ver++; this.thumbDirty = true; }
+  touchMask() { this.mver++; this.thumbDirty = true; }
+  /** Grow (or create) the mask so it covers the doc-space rectangle. Outside the mask a layer is fully visible. */
+  ensureMaskRect(x0, y0, x1, y1) {
+    x0 = Math.floor(x0) - this.x; y0 = Math.floor(y0) - this.y; x1 = Math.ceil(x1) - this.x; y1 = Math.ceil(y1) - this.y;
+    const m = this.mask;
+    if (!m) { this.mask = { canvas: makeCanvas(x1 - x0, y1 - y0), x: x0, y: y0 }; return; }
+    const cx1 = m.x + m.canvas.width, cy1 = m.y + m.canvas.height;
+    if (x0 >= m.x && y0 >= m.y && x1 <= cx1 && y1 <= cy1) return;
+    const nx0 = Math.min(x0, m.x), ny0 = Math.min(y0, m.y), nx1 = Math.max(x1, cx1), ny1 = Math.max(y1, cy1);
+    const nc = makeCanvas(nx1 - nx0, ny1 - ny0);
+    ctxOf(nc).drawImage(m.canvas, m.x - nx0, m.y - ny0);
+    this.mask = { canvas: nc, x: nx0, y: ny0 };
+  }
+  maskBounds() { const m = this.mask; return m ? { x: this.x + m.x, y: this.y + m.y, w: m.canvas.width, h: m.canvas.height } : null; }
   get w() { return this.canvas ? this.canvas.width : 0; }
   get h() { return this.canvas ? this.canvas.height : 0; }
   bounds() { return this.canvas ? { x: this.x, y: this.y, w: this.canvas.width, h: this.canvas.height } : null; }
@@ -42,7 +61,8 @@ export function layerMeta(L) {
   return {
     id: L.id, type: L.type, name: L.name, visible: L.visible, opacity: L.opacity, fill: L.fill, blend: L.blend,
     lockTrans: L.lockTrans, lockPix: L.lockPix, lockPos: L.lockPos, lockAll: L.lockAll,
-    x: L.x, y: L.y, w: L.w, h: L.h, collapsed: L.collapsed,
+    x: L.x, y: L.y, w: L.w, h: L.h, collapsed: L.collapsed, maskOn: L.maskOn,
+    mask: L.mask ? { x: L.mask.x, y: L.mask.y, w: L.mask.canvas.width, h: L.mask.canvas.height } : null,
   };
 }
 
@@ -54,7 +74,8 @@ export function cloneCanvas(c) {
 }
 
 export function cloneLayer(L, fresh = true, suffix = '') {
-  const n = new Layer({ ...layerMeta(L), id: fresh ? undefined : L.id, name: L.name + suffix, canvas: cloneCanvas(L.canvas) });
+  const n = new Layer({ ...layerMeta(L), id: fresh ? undefined : L.id, name: L.name + suffix, canvas: cloneCanvas(L.canvas),
+    mask: L.mask ? { canvas: cloneCanvas(L.mask.canvas), x: L.mask.x, y: L.mask.y } : null });
   if (L.type === 'group') { n.children = L.children.map((k) => cloneLayer(k, fresh)); }
   return n;
 }
@@ -63,7 +84,7 @@ export function walkLayers(list, fn, parent = null) {
   for (const L of list) { fn(L, parent); if (L.children) walkLayers(L.children, fn, L); }
 }
 
-function treeBytes(layers) { let n = 0; walkLayers(layers, (L) => { n += canvasBytes(L.canvas); }); return n; }
+function treeBytes(layers) { let n = 0; walkLayers(layers, (L) => { n += canvasBytes(L.canvas) + (L.mask ? canvasBytes(L.mask.canvas) : 0); }); return n; }
 
 // ───────────────────────── History ─────────────────────────
 export class History {
@@ -94,11 +115,23 @@ class Txn {
     set(n); this.bytes += canvasBytes(o.canvas);
     this.ops.push({ undo: () => set(o), redo: () => set(n) });
   }
+  setMask(L, mask) {
+    const o = L.mask;
+    const set = (v) => { L.mask = v; L.touchMask(); };
+    set(mask); this.bytes += o ? canvasBytes(o.canvas) : 0;
+    this.ops.push({ undo: () => set(o), redo: () => set(mask) });
+  }
   setProps(L, props) {
     const o = {}; for (const k of Object.keys(props)) o[k] = L[k];
     Object.assign(L, props);
     if ('x' in props || 'y' in props) L.touch();
     this.ops.push({ undo: () => Object.assign(L, o), redo: () => Object.assign(L, props) });
+  }
+  clearSel() {
+    const d = this.doc, o = d.sel;
+    if (!o) return;
+    d.sel = null; this.bytes += selBytes(o);
+    this.ops.push({ undo: () => { d.sel = o; }, redo: () => { d.sel = null; } });
   }
   setSize(w, h) {
     const d = this.doc, ow = d.w, oh = d.h;
@@ -108,7 +141,7 @@ class Txn {
   end() {
     const d = this.doc, after = d.snapTree();
     const keep = new Set(); walkLayers(d.layers, (L) => keep.add(L));
-    let gone = 0; const scan = (nodes) => { for (const n of nodes) { if (!keep.has(n.L)) gone += canvasBytes(n.L.canvas); if (n.kids) scan(n.kids); } };
+    let gone = 0; const scan = (nodes) => { for (const n of nodes) { if (!keep.has(n.L)) gone += canvasBytes(n.L.canvas) + (n.L.mask ? canvasBytes(n.L.mask.canvas) : 0); if (n.kids) scan(n.kids); } };
     scan(this.before.tree);
     const before = this.before, ops = this.ops;
     d.hist.push({
@@ -134,6 +167,7 @@ export class Doc {
     this.seq = 1; this.gseq = 1;
     this.listeners = new Set();
     this.live = null;
+    this.sel = null; this.lastSel = null;   // selection: {canvas (alpha), x, y} in doc space
   }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   changed(info = {}) { this.rev++; this.modified = Date.now(); for (const fn of this.listeners) fn(info); }
@@ -174,6 +208,59 @@ export class Doc {
     L.touch();
     this.pushPatch(L, rect, before, after, name);
     this.changed({ rect, layerId: L.id });
+  }
+  // mask pixel history (mask canvas holds HIDE amount in its alpha channel)
+  pushMaskPatch(L, rect, before, after, name) {
+    const apply = (img) => { L.ensureMaskRect(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h); const m = L.mask; ctxOf(m.canvas).putImageData(img, rect.x - L.x - m.x, rect.y - L.y - m.y); L.touchMask(); };
+    this.hist.push({ name, rect, bytes: rect.w * rect.h * 8, undo: () => apply(before), redo: () => apply(after) });
+    this.changed({ rect, layerId: L.id, skipRender: true });
+  }
+  editMask(L, rect, name, fn) {
+    L.ensureMaskRect(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+    const m = L.mask, g = ctxOf(m.canvas), ox = rect.x - L.x - m.x, oy = rect.y - L.y - m.y;
+    const before = g.getImageData(ox, oy, rect.w, rect.h);
+    fn(g, -(L.x + m.x), -(L.y + m.y));
+    const after = g.getImageData(ox, oy, rect.w, rect.h);
+    L.touchMask();
+    this.pushMaskPatch(L, rect, before, after, name);
+    this.changed({ rect, layerId: L.id });
+  }
+  /** Multiply an RGBA rect-sized canvas by the active selection (in place). */
+  clipToSelection(src, rect) {
+    if (!this.sel) return src;
+    const g = ctxOf(src); g.save(); g.globalCompositeOperation = 'destination-in';
+    g.drawImage(this.sel.canvas, this.sel.x - rect.x, this.sel.y - rect.y);
+    g.restore();
+    return src;
+  }
+  /** Put a rect-sized RGBA canvas onto the paint target (layer pixels, or the mask when the mask is being edited). */
+  paintToTarget(L, rect, name, src, { erase = false, clip = true } = {}) {
+    if (clip) this.clipToSelection(src, rect);
+    if (L.editMask && L.mask) {
+      const img = ctxOf(src).getImageData(0, 0, rect.w, rect.h).data;
+      this.editMask(L, rect, name, (g, ox, oy) => {
+        const m = g.getImageData(rect.x + ox, rect.y + oy, rect.w, rect.h), d = m.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const a = img[i + 3] / 255; if (!a) continue;
+          const lum = erase ? 1 : (0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2]) / 255;
+          d[i + 3] = d[i + 3] * (1 - a) + (1 - lum) * 255 * a;
+        }
+        g.putImageData(m, rect.x + ox, rect.y + oy);
+      });
+      return;
+    }
+    this.editPixels(L, rect, name, (g, ox, oy) => {
+      g.save();
+      g.globalCompositeOperation = erase ? 'destination-out' : (L.lockTrans ? 'source-atop' : 'source-over');
+      g.drawImage(src, rect.x + ox, rect.y + oy); g.restore();
+    });
+  }
+  setSelection(sel, name = 'Select') {
+    const old = this.sel;
+    if (old) this.lastSel = old;
+    this.sel = sel;
+    this.hist.push({ name, bytes: selBytes(old) + selBytes(sel), sel: true, undo: () => { this.sel = old; }, redo: () => { this.sel = sel; } });
+    this.changed({ selection: true });
   }
   pushProps(name, entries) {   // entries: [{layer, old:{}, now:{}}] already applied
     this.hist.push({
@@ -269,9 +356,10 @@ export class Doc {
     const region = rectUnion(bb, ub);
     if (!region) return false;
     const t = this.begin('Merge Layers');
-    const lower = { type: 'raster', visible: true, opacity: 1, fill: 1, blend: 'normal', canvas: below.canvas, x: below.x, y: below.y };
+    const lower = { type: 'raster', visible: true, opacity: 1, fill: 1, blend: 'normal', canvas: below.canvas, x: below.x, y: below.y, mask: below.mask, maskOn: below.maskOn };
     const out = this._flatten([lower, L], region);
     t.swapPixels(below, out, region.x, region.y);
+    if (below.mask) t.setMask(below, null);
     n.list.splice(n.index, 1); this.activeId = below.id;
     t.end(); return true;
   }
@@ -301,26 +389,111 @@ export class Doc {
     t.end(); return true;
   }
   fillLayer(L, color, name = 'Fill') {
-    if (!L || L.type !== 'raster' || L.lockPix || L.lockAll) return false;
-    this.editPixels(L, { x: 0, y: 0, w: this.w, h: this.h }, name, (g, ox, oy) => {
-      g.save(); g.globalCompositeOperation = L.lockTrans ? 'source-atop' : 'source-over';
-      g.fillStyle = color; g.fillRect(ox, oy, this.w, this.h); g.restore();
-    });
+    if (!L || L.type !== 'raster') return false;
+    const editM = L.editMask && L.mask;
+    if (!editM && (L.lockPix || L.lockAll)) return false;
+    let rect = { x: 0, y: 0, w: this.w, h: this.h };
+    if (this.sel) { const b = { x: this.sel.x, y: this.sel.y, w: this.sel.canvas.width, h: this.sel.canvas.height }; rect = rectIntersect(rect, b); if (!rect) return false; }
+    const src = makeCanvas(rect.w, rect.h, false), g = ctxOf(src); g.fillStyle = color; g.fillRect(0, 0, rect.w, rect.h);
+    this.paintToTarget(L, rect, name, src);
     return true;
   }
   clearLayer(L) {
     if (!L || L.type !== 'raster' || !L.canvas || L.lockPix || L.lockAll) return false;
+    if (this.sel) {
+      const rect = rectIntersect(L.bounds(), { x: this.sel.x, y: this.sel.y, w: this.sel.canvas.width, h: this.sel.canvas.height });
+      if (!rect) return false;
+      const src = makeCanvas(rect.w, rect.h, false), g = ctxOf(src); g.fillStyle = '#000'; g.fillRect(0, 0, rect.w, rect.h);
+      this.paintToTarget(L, rect, 'Clear', src, { erase: true });
+      return true;
+    }
     const r = L.bounds();
     this.editPixels(L, r, 'Clear', (g) => g.clearRect(0, 0, L.canvas.width, L.canvas.height));
     return true;
   }
 
+  // ── layer masks ──
+  _maskRegion(L) { return rectUnion({ x: 0, y: 0, w: this.w, h: this.h }, L.bounds()); }
+  /** kind: 'reveal' | 'hide' | 'revealSel' | 'hideSel' */
+  addMask(L, kind = 'reveal') {
+    if (!L || L.type !== 'raster' || L.mask) return false;
+    const r = this._maskRegion(L), c = makeCanvas(r.w, r.h), g = ctxOf(c);
+    const sel = this.sel;
+    if (kind === 'hide' || kind === 'revealSel') { g.fillStyle = '#000'; g.fillRect(0, 0, r.w, r.h); }
+    if (sel && kind === 'revealSel') { g.globalCompositeOperation = 'destination-out'; g.drawImage(sel.canvas, sel.x - r.x, sel.y - r.y); }
+    if (sel && kind === 'hideSel') {
+      const t = makeCanvas(sel.canvas.width, sel.canvas.height), tg = ctxOf(t); tg.fillStyle = '#000'; tg.fillRect(0, 0, t.width, t.height);
+      tg.globalCompositeOperation = 'destination-in'; tg.drawImage(sel.canvas, 0, 0); g.drawImage(t, sel.x - r.x, sel.y - r.y);
+    }
+    if ((kind === 'revealSel' || kind === 'hideSel') && !sel) return this.addMask(L, kind === 'revealSel' ? 'hide' : 'reveal');
+    const t = this.begin('Add Layer Mask');
+    t.setMask(L, { canvas: c, x: r.x - L.x, y: r.y - L.y });
+    t.setProps(L, { maskOn: true });
+    L.editMask = true;
+    t.end(); return true;
+  }
+  deleteMask(L, apply = false) {
+    if (!L || !L.mask) return false;
+    const t = this.begin(apply ? 'Apply Layer Mask' : 'Delete Layer Mask');
+    if (apply && L.canvas) {
+      const out = makeCanvas(L.w, L.h), g = ctxOf(out);
+      g.drawImage(L.canvas, 0, 0);
+      if (L.maskOn) { g.globalCompositeOperation = 'destination-out'; g.drawImage(L.mask.canvas, L.mask.x, L.mask.y); }
+      t.swapPixels(L, out, L.x, L.y);
+    }
+    t.setMask(L, null); L.editMask = false;
+    t.end(); return true;
+  }
+  invertMask(L) {
+    if (!L || !L.mask) return false;
+    const r = this._maskRegion(L);
+    this.editMask(L, r, 'Invert Mask', (g, ox, oy) => {
+      const im = g.getImageData(r.x + ox, r.y + oy, r.w, r.h), d = im.data;
+      for (let i = 3; i < d.length; i += 4) d[i] = 255 - d[i];
+      g.putImageData(im, r.x + ox, r.y + oy);
+    });
+    return true;
+  }
+  toggleMask(L) {
+    if (!L || !L.mask) return;
+    const o = L.maskOn; L.maskOn = !o; L.touchMask();
+    this.pushProps(L.maskOn ? 'Enable Layer Mask' : 'Disable Layer Mask', [{ layer: L, old: { maskOn: o }, now: { maskOn: L.maskOn } }]);
+  }
+
   // ── whole-document geometry ──
   _rebuildAll(name, nw, nh, fn) {
     const t = this.begin(name);
-    walkLayers(this.layers, (L) => { if (L.type === 'raster' && L.canvas) { const r = fn(L); if (r) t.swapPixels(L, r.canvas, r.x, r.y); } });
+    walkLayers(this.layers, (L) => {
+      if (L.type !== 'raster') return;
+      let r = null;
+      if (L.canvas) { r = fn(L); if (r) t.swapPixels(L, r.canvas, r.x, r.y); }
+      if (L.mask) {
+        const m = L.mask, rm = fn({ x: L.x + m.x, y: L.y + m.y, w: m.canvas.width, h: m.canvas.height, canvas: m.canvas });
+        if (rm && rm.canvas) { const nx = r ? r.x : L.x, ny = r ? r.y : L.y; t.setMask(L, { canvas: rm.canvas, x: rm.x - nx, y: rm.y - ny }); } else t.setMask(L, null);
+      }
+    });
+    t.clearSel();
     t.setSize(nw, nh);
     t.end();
+  }
+  /** Crop the document to a doc-space rectangle. deletePixels=false keeps off-canvas pixels on the layers. */
+  cropTo(rect, deletePixels = true) {
+    rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
+    if (rect.w < 1 || rect.h < 1) return false;
+    if (rect.x === 0 && rect.y === 0 && rect.w === this.w && rect.h === this.h) return false;
+    if (!deletePixels) {
+      const t = this.begin('Crop');
+      walkLayers(this.layers, (L) => { t.setProps(L, { x: L.x - rect.x, y: L.y - rect.y }); });
+      t.clearSel(); t.setSize(rect.w, rect.h); t.end(); return true;
+    }
+    this._rebuildAll('Crop', rect.w, rect.h, (P) => {
+      const ix = rectIntersect({ x: P.x, y: P.y, w: P.w, h: P.h }, rect);
+      if (!ix) return { canvas: null, x: 0, y: 0 };
+      const out = makeCanvas(ix.w, ix.h);
+      ctxOf(out).drawImage(P.canvas, P.x - ix.x, P.y - ix.y);
+      return { canvas: out, x: ix.x - rect.x, y: ix.y - rect.y };
+    });
+    return true;
   }
   resizeImage(nw, nh, { smooth = true, sharpen = 0 } = {}) {
     const sx = nw / this.w, sy = nh / this.h;
@@ -347,6 +520,7 @@ export class Doc {
     const dx = Math.round((nw - this.w) * ax / 2), dy = Math.round((nh - this.h) * ay / 2);
     const t = this.begin('Canvas Size');
     walkLayers(this.layers, (L) => { t.setProps(L, { x: L.x + dx, y: L.y + dy }); });
+    t.clearSel();
     t.setSize(nw, nh);
     t.end();
   }
