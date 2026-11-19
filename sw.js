@@ -1,5 +1,5 @@
 // Offline cache for Effigies. Bump VERSION on every release (it must match APP_VERSION in js/main.js).
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const CACHE = 'effigies-cache-' + VERSION;
 const ASSETS = [
   './',
@@ -13,6 +13,8 @@ const ASSETS = [
   'js/doc.js',
   'js/viewport.js',
   'js/tools.js',
+  'js/tools2.js',
+  'js/select.js',
   'js/store.js',
   'js/project.js',
   'js/dialogs.js',
