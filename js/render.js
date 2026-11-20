@@ -3,6 +3,7 @@
 import { blendBuffers } from './blend.js';
 import { ctxOf } from './util.js';
 import { runAdjust } from './adjust.js';
+import { activeStyles, styleExtent, applyStyles } from './styles.js';
 
 const pool = new Map();
 export function takeCanvas(w, h) {
@@ -42,19 +43,23 @@ function layerBounds(L, live) {
 }
 
 function drawRaster(L, g, tf, W, H, live, org, ov = null) {
+  if (L.hideForEdit) return;
   const hasLive = !!(live && live.canvas && live.layer === L);
   const pv = live && live.preview && live.layer === L ? live.preview : null;
   if (!L.canvas && !hasLive) return;
+  const st = ov && ov.plain ? null : activeStyles(L);   // plain = the alpha reference of a clipping group (no effects)
   const eff = ov ? ov.eff : L.opacity * L.fill, blend = ov ? ov.blend : L.blend;
-  const b = layerBounds(L, live);
+  const b0 = layerBounds(L, live);
   const z = tf.zoom;
-  const x0 = Math.max(0, Math.floor(b.x * z + tf.tx)), y0 = Math.max(0, Math.floor(b.y * z + tf.ty));
-  const x1 = Math.min(W, Math.ceil((b.x + b.w) * z + tf.tx)), y1 = Math.min(H, Math.ceil((b.y + b.h) * z + tf.ty));
+  const pad = st ? styleExtent(st) : 0, b = pad ? { x: b0.x - pad, y: b0.y - pad, w: b0.w + 2 * pad, h: b0.h + 2 * pad } : b0;
+  const mg = st ? Math.ceil(pad * z) + 2 : 0;      // keep a margin outside the visible tile so blurs near its edges are right
+  const x0 = Math.max(-mg, Math.floor(b.x * z + tf.tx)), y0 = Math.max(-mg, Math.floor(b.y * z + tf.ty));
+  const x1 = Math.min(W + mg, Math.ceil((b.x + b.w) * z + tf.tx)), y1 = Math.min(H + mg, Math.ceil((b.y + b.h) * z + tf.ty));
   const rw = x1 - x0, rh = y1 - y0;
   if (rw <= 0 || rh <= 0) return;
   const smooth = z < 1;
   const masked = !!(L.mask && L.maskOn);
-  if (blend === 'normal' && !hasLive && !masked && !pv) {
+  if (blend === 'normal' && !hasLive && !masked && !pv && !st) {
     g.globalAlpha = eff;
     g.setTransform(z, 0, 0, z, tf.tx, tf.ty);
     g.imageSmoothingEnabled = smooth; if (smooth) g.imageSmoothingQuality = 'high';
@@ -92,6 +97,16 @@ function drawRaster(L, g, tf, W, H, live, org, ov = null) {
     sg.globalCompositeOperation = 'source-over';
   }
   sg.setTransform(1, 0, 0, 1, 0, 0);
+  if (st) {   // effects: draw around/over the content, then crop to what is on screen
+    const bounds = { x: b0.x * z + tf.tx - x0, y: b0.y * z + tf.ty - y0, w: b0.w * z, h: b0.h * z };
+    const Rr = applyStyles(S, st, z, ov ? 1 : L.fill, bounds); releaseCanvas(S);
+    const vx = Math.max(0, x0), vy = Math.max(0, y0), vw = Math.min(W, x0 + rw) - vx, vh = Math.min(H, y0 + rh) - vy;
+    if (vw > 0 && vh > 0) {
+      const V = takeCanvas(vw, vh); ctxOf(V).drawImage(Rr, x0 - vx, y0 - vy);
+      blendOnto(g, V, vx, vy, vw, vh, blend, ov ? ov.eff : L.opacity, org.x, org.y); releaseCanvas(V);
+    }
+    releaseCanvas(Rr); return;
+  }
   blendOnto(g, S, x0, y0, rw, rh, blend, eff, org.x, org.y);
   releaseCanvas(S);
 }
@@ -170,16 +185,19 @@ function drawList(layers, g, tf, W, H, live, org) {
     }
     // clipping group: draw the base alone, blend each clipped layer into it (only where the base has pixels), then place the result
     const G = takeCanvas(W, H), gg = ctxOf(G);
-    drawOne(L, gg, tf, W, H, live, org, { blend: 'normal', eff: 1 });
+    drawOne(L, gg, tf, W, H, live, org, { blend: 'normal', eff: 1, plain: true });   // G: the base's own pixels, the clip reference
+    const P = activeStyles(L) ? takeCanvas(W, H) : G, pg = P === G ? gg : ctxOf(P);   // P: what gets placed (the base with its effects)
+    if (P !== G) drawOne(L, pg, tf, W, H, live, org, { blend: 'normal', eff: 1 });
     for (const c of vis) {
-      if (c.type === 'adjust') { drawAdjust(c, gg, tf, W, H); continue; }
+      if (c.type === 'adjust') { drawAdjust(c, pg, tf, W, H); continue; }
       const T = takeCanvas(W, H), tg = ctxOf(T);
       drawOne(c, tg, tf, W, H, live, org, { blend: 'normal', eff: 1 });
       tg.setTransform(1, 0, 0, 1, 0, 0); tg.globalCompositeOperation = 'destination-in'; tg.drawImage(G, 0, 0); tg.globalCompositeOperation = 'source-over';
-      blendOnto(gg, T, 0, 0, W, H, modeOf(c), effOf(c), org.x, org.y);
+      blendOnto(pg, T, 0, 0, W, H, modeOf(c), effOf(c), org.x, org.y);
       releaseCanvas(T);
     }
-    blendOnto(g, G, 0, 0, W, H, modeOf(L), effOf(L), org.x, org.y);
+    blendOnto(g, P, 0, 0, W, H, modeOf(L), effOf(L), org.x, org.y);
+    if (P !== G) releaseCanvas(P);
     releaseCanvas(G);
   }
 }

@@ -319,6 +319,6 @@ class EyedropperTool {
 
 export function createTools(app) {
   const t2 = createTools2(app), pick = (re) => t2.filter((t) => re.test(t.id));
-  const list = [new MoveTool(app), ...pick(/^marquee/), ...pick(/^crop/), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), ...pick(/^(gradient|bucket)/), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
+  const list = [new MoveTool(app), ...pick(/^marquee/), ...pick(/^crop/), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), ...pick(/^(gradient|bucket)/), ...pick(/^type$/), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
   return Object.fromEntries(list.map((t) => [t.id, t]));
 }

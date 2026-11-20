@@ -16,6 +16,8 @@ export async function exportProject(doc, appVersion) {
         x: L.x, y: L.y, width: L.w, height: L.h,
       };
       if (L.clip) o.clip = true;
+      if (L.text) o.text = L.text;
+      if (L.styles) o.styles = L.styles;
       if (L.type === 'adjust') o.adjustment = { id: L.adj.id, params: L.adj.params };
       if (L.type === 'group') { o.collapsed = L.collapsed; o.children = await enc(L.children); }
       else if (L.canvas) { images.push(await blobToDataURL(await canvasToBlob(L.canvas))); o.image = `@@IMG${images.length - 1}@@`; }
@@ -63,7 +65,7 @@ export async function importProject(text, { newId = false } = {}) {
     for (const o of list) {
       const lk = o.lock || {};
       const L = new Layer({
-        id: o.id, type: o.type === 'group' ? 'group' : o.type === 'adjust' && o.adjustment ? 'adjust' : 'raster', clip: !!o.clip, adj: o.type === 'adjust' ? o.adjustment : null, name: o.name, visible: o.visible !== false, opacity: o.opacity ?? 1, fill: o.fill ?? 1, blend: o.blend,
+        id: o.id, type: o.type === 'group' ? 'group' : o.type === 'adjust' && o.adjustment ? 'adjust' : 'raster', clip: !!o.clip, text: o.text || null, styles: o.styles || null, adj: o.type === 'adjust' ? o.adjustment : null, name: o.name, visible: o.visible !== false, opacity: o.opacity ?? 1, fill: o.fill ?? 1, blend: o.blend,
         lockTrans: lk.transparentPixels, lockPix: lk.imagePixels, lockPos: lk.position, lockAll: lk.all, x: o.x || 0, y: o.y || 0, collapsed: o.collapsed,
       });
       if (L.type === 'group') L.children = await dec(o.children || []);

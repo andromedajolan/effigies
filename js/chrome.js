@@ -92,7 +92,10 @@ export function buildMenus(app) {
       { label: 'Duplicate Layer', run: A.duplicateLayer, enabled: lay },
       { label: 'Delete Layer', run: A.deleteLayer, enabled: lay },
       '---',
-      { label: 'Layer Style', stage: 3 },
+      { label: 'Layer Style…', run: () => A.layerStyle(), enabled: () => lay() && lay().type !== 'group' && lay().type !== 'adjust' },
+      { label: 'Copy Layer Style', run: A.copyStyle, enabled: () => lay() && !!lay().styles },
+      { label: 'Paste Layer Style', run: A.pasteStyle, enabled: () => lay() && !!app.styleClip },
+      { label: 'Clear Layer Style', run: A.clearStyle, enabled: () => lay() && !!lay().styles },
       { label: 'Layer Mask', enabled: lay, sub: [
         { label: 'Reveal All', run: () => A.maskAdd('reveal'), enabled: () => lay() && canMask(lay()) && !lay().mask },
         { label: 'Hide All', run: () => A.maskAdd('hide'), enabled: () => lay() && canMask(lay()) && !lay().mask },
@@ -116,7 +119,10 @@ export function buildMenus(app) {
       { label: 'Merge Visible', key: 'Ctrl+Shift+E', run: A.mergeVisible, enabled: has },
       { label: 'Flatten Image', run: A.flatten, enabled: has },
     ]],
-    ['Type', () => [{ label: 'Type tool and lettering', stage: 3 }]],
+    ['Type', () => [
+      { label: 'Horizontal Type Tool', key: 'T', run: () => app.setTool('type') },
+      { label: 'Rasterize Type Layer', run: () => { const d = app.doc; if (d && d.active && d.active.text) d.rasterizeText(d.active); }, enabled: () => lay() && !!lay().text },
+    ]],
     ['Select', () => [
       { label: 'All', key: 'Ctrl+A', run: A.selectAll, enabled: has },
       { label: 'Deselect', key: 'Ctrl+D', run: A.deselect, enabled: () => has() && !!app.doc.sel },
@@ -185,7 +191,7 @@ export function buildToolbox(app) {
   for (const t of Object.values(app.tools)) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t); }
   app.toolGroups = groups; app.groupCurrent = app.groupCurrent || {};
   const btns = new Map();
-  const spacerAfter = new Set(['move', 'crop', 'gradient', 'eyedropper']);
+  const spacerAfter = new Set(['move', 'crop', 'gradient', 'type', 'eyedropper']);
   for (const [g, list] of groups) {
     const cur = list.find((t) => t.id === app.groupCurrent[g]) || list[0];
     const b = h('button', { class: 'tool' + (list.length > 1 ? ' has-group' : ''), 'data-group': g, title: `${cur.name} (${cur.key.toUpperCase()})`, 'aria-label': cur.name, html: cur.icon });
@@ -234,6 +240,7 @@ export function buildOptionsBar(app) {
     bar.append(h('div', { class: 'tname' }, h('span', { html: t.icon }), t.name));
     const o = app.opts(t.optKey || t.id, t.defaults);
     for (const d of t.options || []) {
+      if (d.type === 'custom') { bar.append(d.build()); continue; }
       if (d.type === 'button') { bar.append(h('button', { class: 'btn small', onclick: () => d.run(app) }, d.label)); continue; }
       if (d.type === 'check') {
         const c = h('input', { type: 'checkbox', checked: !!o[d.key] }); c.addEventListener('change', () => { o[d.key] = c.checked; app.savePrefs(); });

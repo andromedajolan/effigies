@@ -55,6 +55,8 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
     "image": "data:image/png;base64,..."
   },
   "clip": false,
+  "text": { },
+  "styles": { },
   "adjustment": { "id": "levels", "params": { } },
   "collapsed": false,
   "children": []
@@ -65,6 +67,8 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `type: "adjust"` is an adjustment layer: it has no `image`; it changes everything below it (or inside its group if the group is isolated). `adjustment.id` is one of `brightnessContrast, levels, curves, exposure, vibrance, hueSat, colorBalance, blackWhite, photoFilter, channelMixer, gradientMap, invert, desaturate, posterize, threshold`. `adjustment.params` is that adjustment's settings object (plain JSON numbers, booleans, strings and arrays; unknown ids should be kept untouched and shown as a hidden-effect placeholder). `opacity` scales its strength; `fill` and `blend` are not used. It may have a `mask` like a raster layer.
 - `clip: true` clips the layer to the nearest layer below it that is not itself clipped (its "base"): the layer is only visible where the base has pixels, and keeps its own blend mode and opacity. Optional; omitted means false. A layer cannot be clipped to an adjustment layer.
+- `text` (optional, on a `raster` layer) marks a **type layer**. The layer's `image` is a render of these settings, so other apps can show it without the font. Fields: `content` (string, `\n` for new lines), `family` (one of the bundled Google Fonts, see `fonts/`), `bold`, `italic` (booleans), `size` (px), `color` (`#rrggbb`), `align` (`left|center|right`), `lineHeight` (multiplier), `tracking` (thousandths of an em), `boxW` (px, or null for point text), `ox`, `oy` (where the text anchor, the first baseline at its alignment point, sits inside `image`; the anchor in the document is `x + ox`, `y + oy`). Painting on the layer removes `text` and keeps the pixels.
+- `styles` (optional, any non-group layer) holds layer styles keyed by effect: `dropShadow`, `outerGlow`, `innerShadow`, `innerGlow`, `bevel`, `colorOverlay`, `gradientOverlay`, `stroke`. Each has `on` plus its own settings (colours as `#rrggbb`, sizes in document px, opacities 0-100, angles in degrees, blend ids as in `blend`). Effects are drawn at render time, outside `image`; `image` itself never contains them.
 - `image` is the layer's pixel rectangle at offset (`x`, `y`) in document space; `null` when empty. Groups have no `image`, but have `children` (bottom to top) and `collapsed`.
 - `blend` is one of 27 mode ids (normal, dissolve, darken, multiply, colorBurn, linearBurn, darkerColor, lighten, screen, colorDodge, linearDodge, lighterColor, overlay, softLight, hardLight, vividLight, linearLight, pinLight, hardMix, difference, exclusion, subtract, divide, hue, saturation, color, luminosity).
 
@@ -72,7 +76,7 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `version` is an integer. Additive changes (new optional fields) keep the version. Breaking changes bump it.
 - Importers must ignore unknown fields and refuse a newer `version` with a clear message.
-- Stage 2 added the optional `mask` field (still version 1). Stage 3A added `type: "adjust"`, `adjustment` and `clip` (still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
+- Stage 2 added the optional `mask` field (still version 1). Stage 3A added `type: "adjust"`, `adjustment` and `clip`, and stage 3B added `text` and `styles` (all still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
 
 ## Size note
 

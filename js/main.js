@@ -2,6 +2,8 @@
 import { h, $, toast, debounce, clamp, makeCanvas, ctxOf, canvasToBlob, download, fmtBytes, uid } from './util.js';
 import { ADJ, ADJ_ORDER, NO_DIALOG, cloneParams, autoLevels, histogram, runAdjust } from './adjust.js';
 import { buildEditor } from './adjust-ui.js';
+import { openStyleDialog } from './styles-ui.js';
+import { activeStyles, styleExtent, cloneStyles } from './styles.js';
 import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers, canMask } from './doc.js';
 import { Viewport } from './viewport.js';
 import { selectAll, invertSel, featherSel, growSel, selRect } from './select.js';
@@ -13,7 +15,7 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.3.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.4.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -71,7 +73,11 @@ app.onDocChanged = (doc, info) => {
   if (info.history && !app._inUndo) app._zToggle = false;
   if (doc === app.doc) {
     if (doc._lw !== doc.w || doc._lh !== doc.h) { doc._lw = doc.w; doc._lh = doc.h; app.vp.fit(false); app.vp.invalidate(); }
-    else if (!info.skipRender) app.vp.invalidate(info.rect);
+    else if (!info.skipRender) {
+      let r = info.rect; const al = doc.active, st = al && activeStyles(al);
+      if (r && st) { const e = styleExtent(st); r = { x: r.x - e, y: r.y - e, w: r.w + 2 * e, h: r.h + 2 * e }; }
+      app.vp.invalidate(r);
+    }
     app.emit('docchange', info);
   }
   scheduleSave();
@@ -334,6 +340,12 @@ A.autoTone = (perChannel) => {
   const p = autoLevels(L.canvas.getContext('2d').getImageData(0, 0, L.canvas.width, L.canvas.height).data, perChannel);
   d.applyAdjustment(L, 'levels', p, perChannel ? 'Auto Tone' : 'Auto Contrast');
 };
+
+// ── layer styles ──
+A.layerStyle = (focus) => { const d = app.doc, L = d && d.active; if (!L || L.type === 'group' || L.type === 'adjust') { toast('Select a regular or type layer first.'); return; } openStyleDialog(app, L, focus); };
+A.clearStyle = () => { const d = app.doc, L = d && d.active; if (L && L.styles) d.setStyles(L, null, 'Clear Layer Style'); };
+A.copyStyle = () => { const L = app.doc && app.doc.active; if (L && L.styles) { app.styleClip = cloneStyles(L.styles); toast('Layer style copied.'); } };
+A.pasteStyle = () => { const d = app.doc, L = d && d.active; if (L && app.styleClip && L.type !== 'group' && L.type !== 'adjust') d.setStyles(L, cloneStyles(app.styleClip), 'Paste Layer Style'); };
 
 A.maskInvert = () => { const d = app.doc; if (d && d.active && d.active.mask) d.invertMask(d.active); };
 A.maskToggle = () => { const d = app.doc; if (d && d.active && d.active.mask) d.toggleMask(d.active); };

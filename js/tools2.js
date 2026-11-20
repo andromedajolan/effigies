@@ -3,6 +3,7 @@ import { makeCanvas, ctxOf, clamp, hexToRgb, toast, rectIntersect } from './util
 import { shapeSelection, combine, selRect, trim } from './select.js';
 import { compose, releaseCanvas } from './render.js';
 import { GRADIENTS, stopsFor, lut } from './gradients.js';
+import { TypeTool } from './type.js';
 export { GRADIENTS };
 
 const svg = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -335,6 +336,6 @@ export function createTools2(app) {
   return [
     new MarqueeTool(app, 'rect', 'Rectangular Marquee Tool'), new MarqueeTool(app, 'ellipse', 'Elliptical Marquee Tool'),
     new MarqueeTool(app, 'row', 'Single Row Marquee Tool'), new MarqueeTool(app, 'col', 'Single Column Marquee Tool'),
-    new CropTool(app), new GradientTool(app), new BucketTool(app),
+    new CropTool(app), new GradientTool(app), new BucketTool(app), new TypeTool(app),
   ];
 }

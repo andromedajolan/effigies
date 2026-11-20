@@ -222,6 +222,7 @@ function layersPanel(app) {
     const th = l.type === 'group' ? h('div', { class: 'thumb grp' }, '📁') : l.type === 'adjust' ? h('div', { class: 'thumb adjt', title: ADJ[l.adj.id].name }, '◐') : h('div', { class: 'thumb' }, thumbFor(l, d));
     const nm = h('div', { class: 'nm', title: l.name }, l.name);
     nm.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(l, nm); });
+    if (l.styles && Object.values(l.styles).some((s) => s && s.on)) { nm.append(h('span', { class: 'fx', title: 'Layer style (double-click to edit)', onclick: (e) => { e.stopPropagation(); if (d.activeId !== l.id) d.activeId = l.id; app.actions.layerStyle(); } }, 'fx')); }
     const lk = h('span', { class: 'lk' }, [l.lockAll && '🔒', !l.lockAll && l.lockTrans && '▨', !l.lockAll && l.lockPix && '✎', !l.lockAll && l.lockPos && '✥'].filter(Boolean).join(''));
     if (l.type !== 'group' && l.mask) {
       th.classList.toggle('target', !l.editMask);

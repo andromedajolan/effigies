@@ -2,6 +2,8 @@
 import { uid, makeCanvas, ctxOf, rectUnion, rectIntersect } from './util.js';
 import { ADJ, runAdjust, cloneParams } from './adjust.js';
 import { selRect } from './select.js';
+import { cloneStyles } from './styles.js';
+import { renderText } from './type.js';
 
 export const canMask = (L) => !!L && (L.type === 'raster' || L.type === 'adjust');
 import { compose, renderFull, releaseCanvas } from './render.js';
@@ -27,6 +29,9 @@ export class Layer {
     this.maskOn = o.maskOn ?? true;
     this.adj = o.adj ? { id: o.adj.id, params: cloneParams(o.adj.params) } : null;   // adjustment layers: {id, params}
     this.clip = !!o.clip;                // clipped to the layer below it
+    this.text = o.text ? JSON.parse(JSON.stringify(o.text)) : null;   // type layers keep their settings here; the pixels are a cache of the render
+    this.styles = cloneStyles(o.styles);   // layer styles: {dropShadow:{on,...}, ...}
+    this.hideForEdit = false;            // transient: the text is being edited on canvas
     this.editMask = false;               // transient: paint target is the mask
     this.mver = 1;
     this.ver = 1;          // bumps whenever pixels change (autosave watches this)
@@ -69,6 +74,7 @@ export function layerMeta(L) {
     lockTrans: L.lockTrans, lockPix: L.lockPix, lockPos: L.lockPos, lockAll: L.lockAll,
     x: L.x, y: L.y, w: L.w, h: L.h, collapsed: L.collapsed, maskOn: L.maskOn, clip: L.clip,
     adj: L.adj ? { id: L.adj.id, params: cloneParams(L.adj.params) } : null,
+    text: L.text ? JSON.parse(JSON.stringify(L.text)) : null, styles: cloneStyles(L.styles),
     mask: L.mask ? { x: L.mask.x, y: L.mask.y, w: L.mask.canvas.width, h: L.mask.canvas.height } : null,
   };
 }
@@ -207,6 +213,7 @@ export class Doc {
   }
   /** Run drawing code on a layer over a doc-space rect and record the change for undo. */
   editPixels(L, rect, name, fn) {
+    this.rasterizeText(L);   // painting on a type layer turns it into ordinary pixels
     L.ensureRect(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
     const g = ctxOf(L.canvas), ox = rect.x - L.x, oy = rect.y - L.y;
     const before = g.getImageData(ox, oy, rect.w, rect.h);
@@ -420,6 +427,52 @@ export class Doc {
     return true;
   }
 
+
+  // ── type layers and layer styles ──
+  _textState(L) { return { text: L.text ? JSON.parse(JSON.stringify(L.text)) : null, x: L.x, y: L.y }; }
+  _applyTextState(L, st) {
+    L.text = st.text ? JSON.parse(JSON.stringify(st.text)) : null;
+    if (L.text) { const r = renderText(L.text); L.canvas = r.canvas; }
+    L.x = st.x; L.y = st.y; L.touch();
+  }
+  /** New type layer from settings (already font-loaded). ax, ay = where the text anchor sits in the document. */
+  addTextLayer(text, ax, ay, name) {
+    const t = this.begin('Type');
+    const r = renderText(text);
+    text.ox = r.ox; text.oy = r.oy;
+    const L = new Layer({ name: name || (text.content.split('\n')[0].slice(0, 24) || 'Text'), canvas: r.canvas, x: Math.round(ax - r.ox), y: Math.round(ay - r.oy), text });
+    this._insertAbove(L); this.activeId = L.id;
+    t.end(); return L;
+  }
+  /** Change a type layer's settings (re-renders it), keeping its anchor point fixed. */
+  setText(L, text, name = 'Change Text') {
+    if (!L || !L.text) return false;
+    const old = this._textState(L), ax = L.x + L.text.ox, ay = L.y + L.text.oy;
+    const r = renderText(text); text.ox = r.ox; text.oy = r.oy;
+    L.text = text; L.canvas = r.canvas; L.x = Math.round(ax - r.ox); L.y = Math.round(ay - r.oy); L.touch();
+    const now = this._textState(L);
+    this.hist.push({ name, bytes: 0, undo: () => this._applyTextState(L, old), redo: () => this._applyTextState(L, now) });
+    this.changed({ tree: true });
+    return true;
+  }
+  /** Stop being a type layer: the pixels stay, the text settings go. Called automatically before painting on one. */
+  rasterizeText(L) {
+    if (!L || !L.text) return false;
+    const old = this._textState(L), now = { text: null, x: L.x, y: L.y };
+    L.text = null;
+    this.hist.push({ name: 'Rasterize Type', bytes: 0, undo: () => { L.text = old.text ? JSON.parse(JSON.stringify(old.text)) : null; }, redo: () => { L.text = null; } });
+    this.changed({ tree: true });
+    return true;
+  }
+  setStyles(L, styles, name = 'Layer Style') {
+    if (!L || L.type === 'group') return false;
+    const old = cloneStyles(L.styles), now = cloneStyles(styles);
+    if (JSON.stringify(old) === JSON.stringify(now)) return false;
+    L.styles = cloneStyles(now); L.touch();
+    this.hist.push({ name, bytes: 0, undo: () => { L.styles = cloneStyles(old); L.touch(); }, redo: () => { L.styles = cloneStyles(now); L.touch(); } });
+    this.changed({ tree: true });
+    return true;
+  }
 
   // ── adjustments ──
   /** The mask a paint/fill tool should write to: adjustment layers get a reveal-all mask the first time something paints on them. */
