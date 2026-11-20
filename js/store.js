@@ -157,3 +157,8 @@ export async function persistRequest() {
 export async function storageEstimate() {
   try { return await navigator.storage.estimate(); } catch { return null; }
 }
+
+// generic blob helpers (used by the pattern library; keys must not start with a document id)
+export async function blobGet(k) { const db = await open(); return wrap(db.transaction('blobs').objectStore('blobs').get(k)); }
+export async function blobPut(k, blob) { const db = await open(); const tx = db.transaction('blobs', 'readwrite'); tx.objectStore('blobs').put(blob, k); return txDone(tx); }
+export async function blobDelete(k) { const db = await open(); const tx = db.transaction('blobs', 'readwrite'); tx.objectStore('blobs').delete(k); return txDone(tx); }

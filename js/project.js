@@ -1,6 +1,7 @@
 // Project file: documented, versioned JSON with layer images as PNG data URLs. See docs/DATA_FORMAT.md.
 import { Doc, Layer } from './doc.js';
 import { makeCanvas, ctxOf, canvasToBlob, blobToDataURL, uid } from './util.js';
+import { patternInfo, patternDataUrl, adoptPatterns } from './patterns.js';
 
 export const FORMAT = 'effigies-project';
 export const FORMAT_VERSION = 1;
@@ -34,6 +35,12 @@ export async function exportProject(doc, appVersion) {
     activeLayerId: doc.activeId, songRef: doc.songRef || null,
     layers: await enc(doc.layers),
   };
+  const used = new Set();
+  const scan = (list) => { for (const L of list) { const po = L.styles && L.styles.patternOverlay; if (po && po.on) used.add(po.pattern); if (L.children) scan(L.children); } };
+  scan(doc.layers);
+  const pats = [];
+  for (const id of used) { const info = patternInfo(id); if (!info || info.builtin) continue; const url = await patternDataUrl(id); if (url) pats.push({ id, name: info.name, image: url }); }
+  if (pats.length) project.patterns = pats;
   const text = JSON.stringify(project, null, 1);
   const parts = []; let last = 0;
   const re = /"@@IMG(\d+)@@"/g; let m;
@@ -57,6 +64,7 @@ export async function importProject(text, { newId = false } = {}) {
   if (!p || p.format !== FORMAT) throw new Error('That is not an Effigies project file.');
   if (typeof p.version !== 'number' || p.version > FORMAT_VERSION) throw new Error('This project was saved by a newer version of Effigies. Update the app first.');
   if (!(p.width > 0 && p.height > 0) || !Array.isArray(p.layers)) throw new Error('The project file is incomplete.');
+  if (Array.isArray(p.patterns)) await adoptPatterns(p.patterns);
   const doc = new Doc({ id: newId ? uid() : p.projectId, name: p.name || 'Untitled', w: p.width, h: p.height });
   if (p.created) doc.created = Date.parse(p.created) || doc.created;
   doc.songRef = p.songRef || null;

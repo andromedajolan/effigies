@@ -3,6 +3,7 @@ import { h, $, toast, debounce, clamp, makeCanvas, ctxOf, canvasToBlob, download
 import { ADJ, ADJ_ORDER, NO_DIALOG, cloneParams, autoLevels, histogram, runAdjust } from './adjust.js';
 import { buildEditor } from './adjust-ui.js';
 import { openStyleDialog } from './styles-ui.js';
+import { initPatterns, patternEvents } from './patterns.js';
 import { activeStyles, styleExtent, cloneStyles } from './styles.js';
 import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers, canMask } from './doc.js';
 import { Viewport } from './viewport.js';
@@ -15,7 +16,7 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.4.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.5.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -520,6 +521,8 @@ async function boot() {
   app.tools = createTools(app);
   app.tool = app.tools[app.prefs.tool] || app.tools.brush;
   app.vp = new Viewport($('#stage'), app);
+  patternEvents.onChange = () => { app.emit('patterns'); app.vp.invalidate && app.vp.invalidate(); };
+  initPatterns().catch(() => {});
   const dock = buildDock(app); app.dockEls = dock.panels;
   buildMenus(app); buildAppbar(app); buildToolbox(app); buildOptionsBar(app); buildTabs(app); buildStatusbar(app);
   let t = 'gray'; try { t = localStorage.getItem('studio.theme') === 'dark' ? 'dark' : 'gray'; } catch { /* ignore */ }

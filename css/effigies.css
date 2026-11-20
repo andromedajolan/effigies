@@ -254,3 +254,14 @@ body.panels-hidden #app { grid-template-rows: 26px 30px 0 minmax(0, 1fr); }
 .ls-pane{flex:1;min-width:0}
 .ls-pane h4{margin:0 0 8px;font-size:13px}
 .ls-pane .adj-row>label{flex:0 0 110px}
+
+/* 3D: contours and patterns */
+.ctr-row{align-items:flex-start}
+.ctr-row>div{flex:1;min-width:0}
+.adj-curve.ctr{width:120px;height:120px;display:block;margin:2px 0 4px}
+.pat-grid{display:flex;flex-wrap:wrap;gap:4px;max-height:160px;overflow:auto;border:1px solid #555;padding:4px;background:#222}
+.pat-grid .pat-set{width:100%;padding:2px 0}
+.pat-th{width:44px;height:44px;cursor:pointer;border:2px solid transparent;image-rendering:auto}
+.pat-th.sel{border-color:#5aa0ff}
+.ls-pane{max-height:62vh;overflow:auto;padding-right:6px}
+.ls-list{max-height:62vh;overflow:auto}

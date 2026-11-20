@@ -99,7 +99,7 @@ function drawRaster(L, g, tf, W, H, live, org, ov = null) {
   sg.setTransform(1, 0, 0, 1, 0, 0);
   if (st) {   // effects: draw around/over the content, then crop to what is on screen
     const bounds = { x: b0.x * z + tf.tx - x0, y: b0.y * z + tf.ty - y0, w: b0.w * z, h: b0.h * z };
-    const Rr = applyStyles(S, st, z, ov ? 1 : L.fill, bounds); releaseCanvas(S);
+    const Rr = applyStyles(S, st, z, ov ? 1 : L.fill, bounds, { L, ox: tf.tx - x0, oy: tf.ty - y0 }); releaseCanvas(S);
     const vx = Math.max(0, x0), vy = Math.max(0, y0), vw = Math.min(W, x0 + rw) - vx, vh = Math.min(H, y0 + rh) - vy;
     if (vw > 0 && vh > 0) {
       const V = takeCanvas(vw, vh); ctxOf(V).drawImage(Rr, x0 - vx, y0 - vy);
