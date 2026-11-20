@@ -213,3 +213,21 @@ body.panels-hidden #app { grid-template-rows: 26px 30px 0 minmax(0, 1fr); }
 .preset { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: #2a2a2a; border: 1px solid var(--line); border-radius: 3px; padding: 2px 3px; color: inherit; font-size: 10px; cursor: pointer; }
 .preset:hover { border-color: var(--hl); }
 .preset canvas { width: 100%; height: 22px; }
+
+/* ── adjustments (stage 3A) ── */
+.adj-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:6px}
+.adj-grid .btn{font-size:11px;padding:3px 4px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.adj-holder{padding:4px 8px 8px;border-top:1px solid var(--line,#444)}
+.adj-hint{opacity:.65;font-size:11px;padding:6px 0}
+.adj-title{font-weight:600;margin:4px 0 6px}
+.adj-row{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px}
+.adj-row>label{flex:0 0 86px}
+.adj-row.chk{gap:4px}
+.adj-row input[type=range]{flex:1;min-width:0}
+.adj-val{display:inline-flex;align-items:center;gap:2px}
+.adj-num{width:48px}
+.adj-hist,.adj-curve{width:100%;max-width:256px;display:block;margin:4px 0;border:1px solid #555;background:#222}
+.adj-curve{aspect-ratio:1;touch-action:none;cursor:crosshair}
+.adj-dialog{min-width:300px}
+.thumb.adjt{display:flex;align-items:center;justify-content:center;font-size:18px}
+.lrow.clipped .nm::before{content:"↳ ";opacity:.6}

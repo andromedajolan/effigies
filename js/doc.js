@@ -1,5 +1,9 @@
 // Document model: layers, groups, history, and every operation that changes them.
 import { uid, makeCanvas, ctxOf, rectUnion, rectIntersect } from './util.js';
+import { ADJ, runAdjust, cloneParams } from './adjust.js';
+import { selRect } from './select.js';
+
+export const canMask = (L) => !!L && (L.type === 'raster' || L.type === 'adjust');
 import { compose, renderFull, releaseCanvas } from './render.js';
 
 export const canvasBytes = (c) => (c ? c.width * c.height * 4 : 0);
@@ -21,6 +25,8 @@ export class Layer {
     this.collapsed = !!o.collapsed;
     this.mask = o.mask || null;          // {canvas, x, y}: x,y are relative to the layer origin; alpha = how much is HIDDEN
     this.maskOn = o.maskOn ?? true;
+    this.adj = o.adj ? { id: o.adj.id, params: cloneParams(o.adj.params) } : null;   // adjustment layers: {id, params}
+    this.clip = !!o.clip;                // clipped to the layer below it
     this.editMask = false;               // transient: paint target is the mask
     this.mver = 1;
     this.ver = 1;          // bumps whenever pixels change (autosave watches this)
@@ -61,7 +67,8 @@ export function layerMeta(L) {
   return {
     id: L.id, type: L.type, name: L.name, visible: L.visible, opacity: L.opacity, fill: L.fill, blend: L.blend,
     lockTrans: L.lockTrans, lockPix: L.lockPix, lockPos: L.lockPos, lockAll: L.lockAll,
-    x: L.x, y: L.y, w: L.w, h: L.h, collapsed: L.collapsed, maskOn: L.maskOn,
+    x: L.x, y: L.y, w: L.w, h: L.h, collapsed: L.collapsed, maskOn: L.maskOn, clip: L.clip,
+    adj: L.adj ? { id: L.adj.id, params: cloneParams(L.adj.params) } : null,
     mask: L.mask ? { x: L.mask.x, y: L.mask.y, w: L.mask.canvas.width, h: L.mask.canvas.height } : null,
   };
 }
@@ -348,13 +355,14 @@ export class Doc {
     return out;
   }
   mergeDown(L = this.active) {
-    if (!L || L.type !== 'raster') return false;
+    if (!L || !canMask(L)) return false;
     const n = this.findNode(L.id);
     const below = n.list[n.index - 1];
     if (!below || below.type !== 'raster' || !L.visible) return false;
     const bb = below.bounds(), ub = L.bounds();
     const region = rectUnion(bb, ub);
     if (!region) return false;
+    if (L.type === 'adjust' && !bb) return false;
     const t = this.begin('Merge Layers');
     const lower = { type: 'raster', visible: true, opacity: 1, fill: 1, blend: 'normal', canvas: below.canvas, x: below.x, y: below.y, mask: below.mask, maskOn: below.maskOn };
     const out = this._flatten([lower, L], region);
@@ -389,7 +397,7 @@ export class Doc {
     t.end(); return true;
   }
   fillLayer(L, color, name = 'Fill') {
-    if (!L || L.type !== 'raster') return false;
+    if (!canMask(L)) return false;
     const editM = L.editMask && L.mask;
     if (!editM && (L.lockPix || L.lockAll)) return false;
     let rect = { x: 0, y: 0, w: this.w, h: this.h };
@@ -412,11 +420,69 @@ export class Doc {
     return true;
   }
 
+
+  // ── adjustments ──
+  /** The mask a paint/fill tool should write to: adjustment layers get a reveal-all mask the first time something paints on them. */
+  paintableMask(L) {
+    if (L && L.type === 'adjust') { if (!L.mask) this.addMask(L, 'reveal'); L.editMask = true; }
+    return L;
+  }
+  addAdjustment(id, params, name) {
+    const a = ADJ[id]; if (!a) return null;
+    const t = this.begin('New Adjustment Layer');
+    const L = new Layer({ type: 'adjust', name: name || a.name, adj: { id, params: params || a.defaults() } });
+    this._insertAbove(L); this.activeId = L.id;
+    t.end(); return L;
+  }
+  /** Live edit of an adjustment layer's parameters (no history). Call commitAdjust when the edit is finished. */
+  liveAdjust(L) { L.touch(); this.changed({ adjust: true, layerId: L.id }); }
+  commitAdjust(L, oldParams, name = 'Adjustment Layer') {
+    const now = cloneParams(L.adj.params), old = cloneParams(oldParams);
+    if (JSON.stringify(now) === JSON.stringify(old)) return;
+    const set = (p) => { L.adj.params = cloneParams(p); L.touch(); };
+    this.hist.push({ name, bytes: 0, undo: () => set(old), redo: () => set(now) });
+    this.changed({ tree: true });
+  }
+  /** Destructive adjustment of the layer's pixels (limited to the selection, if any). */
+  applyAdjustment(L, id, params, name) {
+    if (!L || L.type !== 'raster' || !L.canvas) return false;
+    if (L.lockPix || L.lockAll) return false;
+    let rect = L.bounds();
+    const sel = this.sel;
+    if (sel) { rect = rectIntersect(rect, selRect(sel)); if (!rect) return false; }
+    this.editPixels(L, rect, name || ADJ[id].name, (g, ox, oy) => {
+      const im = g.getImageData(rect.x + ox, rect.y + oy, rect.w, rect.h), d = im.data;
+      const orig = sel ? new Uint8ClampedArray(d) : null;
+      runAdjust(id, d, params);
+      if (sel) {
+        const sc = makeCanvas(rect.w, rect.h, true), sg = ctxOf(sc); sg.drawImage(sel.canvas, sel.x - rect.x, sel.y - rect.y);
+        const sa = sg.getImageData(0, 0, rect.w, rect.h).data;
+        for (let i = 0; i < d.length; i += 4) {
+          const a = sa[i + 3] / 255;
+          if (a < 1) { d[i] = orig[i] + (d[i] - orig[i]) * a; d[i + 1] = orig[i + 1] + (d[i + 1] - orig[i + 1]) * a; d[i + 2] = orig[i + 2] + (d[i + 2] - orig[i + 2]) * a; }
+        }
+      }
+      g.putImageData(im, rect.x + ox, rect.y + oy);
+    });
+    return true;
+  }
+  setClip(L, on) {
+    if (!L || L.clip === on) return false;
+    if (on) {
+      const n = this.findNode(L.id); if (!n || n.index === 0) return false;
+      let i = n.index - 1; while (i > 0 && n.list[i].clip) i--;
+      if (n.list[i].type === 'adjust') return false;   // an adjustment layer has no pixels to clip to
+    }
+    const old = L.clip; L.clip = on;
+    this.pushProps(on ? 'Create Clipping Mask' : 'Release Clipping Mask', [{ layer: L, old: { clip: old }, now: { clip: on } }]);
+    return true;
+  }
+
   // ── layer masks ──
   _maskRegion(L) { return rectUnion({ x: 0, y: 0, w: this.w, h: this.h }, L.bounds()); }
   /** kind: 'reveal' | 'hide' | 'revealSel' | 'hideSel' */
   addMask(L, kind = 'reveal') {
-    if (!L || L.type !== 'raster' || L.mask) return false;
+    if (!canMask(L) || L.mask) return false;
     const r = this._maskRegion(L), c = makeCanvas(r.w, r.h), g = ctxOf(c);
     const sel = this.sel;
     if (kind === 'hide' || kind === 'revealSel') { g.fillStyle = '#000'; g.fillRect(0, 0, r.w, r.h); }
@@ -464,7 +530,7 @@ export class Doc {
   _rebuildAll(name, nw, nh, fn) {
     const t = this.begin(name);
     walkLayers(this.layers, (L) => {
-      if (L.type !== 'raster') return;
+      if (L.type === 'group') return;
       let r = null;
       if (L.canvas) { r = fn(L); if (r) t.swapPixels(L, r.canvas, r.x, r.y); }
       if (L.mask) {

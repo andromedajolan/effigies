@@ -1,7 +1,9 @@
 // Right-hand dock: Color / Swatches, Preview, Layers, History.
 import { h, clamp, debounce, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb, fmtBytes, ctxOf, makeCanvas, toast } from './util.js';
 import { BLEND_GROUPS } from './blend.js';
-import { compose, releaseCanvas } from './render.js';
+import { compose, releaseCanvas, renderFull } from './render.js';
+import { ADJ, ADJ_ORDER, cloneParams, histogram } from './adjust.js';
+import { buildEditor } from './adjust-ui.js';
 import { openDialog } from './dialogs.js';
 import { brushTip, BRUSH_DEFAULTS, ERASER_DEFAULTS, TIPS } from './tools.js';
 
@@ -109,6 +111,39 @@ function previewPanel(app) {
 }
 
 // ───────────── Layers ─────────────
+
+function adjustPanel(app) {
+  const grid = h('div', { class: 'adj-grid' });
+  const holder = h('div', { class: 'adj-holder' });
+  let shownId = null, old = null, base = null;
+  for (const id of ADJ_ORDER) {
+    grid.append(h('button', { class: 'btn', title: 'New ' + ADJ[id].name + ' adjustment layer', onclick: () => app.actions.newAdjustLayer(id) }, ADJ[id].name));
+  }
+  function show() {
+    const d = app.doc, L = d && d.active;
+    if (!L || L.type !== 'adjust') { shownId = null; holder.textContent = ''; holder.append(h('div', { class: 'adj-hint' }, 'Pick an adjustment above to add an adjustment layer, or select one in the Layers panel to edit it.')); return; }
+    if (shownId === L.id) return;
+    shownId = L.id; holder.textContent = ''; old = null; base = cloneParams(L.adj.params);
+    const hist = () => { try { const w = Math.min(d.w, 256), s = w / d.w, c = renderFull(d.layers.filter((x) => x !== L), d.w, d.h, {}); const t = makeCanvas(w, Math.max(1, Math.round(d.h * s))); ctxOf(t).drawImage(c, 0, 0, t.width, t.height); return histogram(ctxOf(t).getImageData(0, 0, t.width, t.height).data); } catch { return null; } };
+    let hcache = null;
+    const ed = buildEditor(L.adj.id, L.adj.params, {
+      onInput: () => { if (!old) old = base || cloneParams(L.adj.params); d.liveAdjust(L); },
+      onChange: () => { if (old) { d.commitAdjust(L, old, ADJ[L.adj.id].name); old = null; } },
+      getHistogram: () => (hcache = hcache || hist()),
+    });
+    holder.append(h('div', { class: 'adj-title' }, ADJ[L.adj.id].name), ed);
+  }
+  app.on('docchange', (info) => {
+    const d = app.doc, L = d && d.active;
+    if (L && L.type === 'adjust' && !old) { base = cloneParams(L.adj.params); if (shownId === L.id && info && info.history) { shownId = null; } }
+    if (!info || info.tree || info.layerId || info.history) show();
+  });
+  app.on('doc', () => { shownId = null; show(); });
+  const body = h('div', null, grid, holder);
+  show();
+  return { body, refresh: () => { shownId = null; show(); } };
+}
+
 function layersPanel(app) {
   const blendSel = h('select', { 'aria-label': 'Blend mode' }, h('option', { value: 'pass' }, 'Pass Through'),
     BLEND_GROUPS.map((g) => h('optgroup', { label: '' }, g.map(([id, l]) => h('option', { value: id }, l)))));
@@ -183,11 +218,12 @@ function layersPanel(app) {
         if (entries.length) d.pushProps('Show/Hide Layers', entries);
       } else { const o = l.visible; l.visible = !o; d.pushProps(o ? 'Hide Layer' : 'Show Layer', [{ layer: l, old: { visible: o }, now: { visible: !o } }]); }
     });
-    const th = l.type === 'group' ? h('div', { class: 'thumb grp' }, '📁') : h('div', { class: 'thumb' }, thumbFor(l, d));
+    if (l.clip) { row.classList.add('clipped'); row.style.paddingLeft = (4 + depth * 14 + 14) + 'px'; }
+    const th = l.type === 'group' ? h('div', { class: 'thumb grp' }, '📁') : l.type === 'adjust' ? h('div', { class: 'thumb adjt', title: ADJ[l.adj.id].name }, '◐') : h('div', { class: 'thumb' }, thumbFor(l, d));
     const nm = h('div', { class: 'nm', title: l.name }, l.name);
     nm.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(l, nm); });
     const lk = h('span', { class: 'lk' }, [l.lockAll && '🔒', !l.lockAll && l.lockTrans && '▨', !l.lockAll && l.lockPix && '✎', !l.lockAll && l.lockPos && '✥'].filter(Boolean).join(''));
-    if (l.type === 'raster' && l.mask) {
+    if (l.type !== 'group' && l.mask) {
       th.classList.toggle('target', !l.editMask);
       th.addEventListener('click', (e) => { if (l.editMask) { l.editMask = false; d.changed({ skipRender: true, tree: true }); } });
       const mt = h('div', { class: 'thumb mask' + (l.editMask ? ' target' : '') + (l.maskOn ? '' : ' off'), title: 'Layer mask (click to paint on it, Shift-click to disable)' }, maskThumb(l, d));
@@ -246,6 +282,8 @@ function layersPanel(app) {
 
   const foot = h('div', { class: 'lay-foot' },
     h('button', { class: 'btn icon', title: 'Add layer mask (from the selection if there is one)', 'aria-label': 'Add layer mask', onclick: () => { const d = app.doc; if (d) app.actions.maskAdd(d.sel ? 'revealSel' : 'reveal'); } }, '◐'),
+    h('button', { class: 'btn icon', title: 'Clipping mask: clip this layer to the one below (Ctrl+Alt+G)', 'aria-label': 'Toggle clipping mask', onclick: () => app.actions.clipToggle() }, '⤵'),
+    h('button', { class: 'btn icon', title: 'New adjustment layer', 'aria-label': 'New adjustment layer', onclick: (e) => app.actions.adjustMenu(e.currentTarget) }, '◐'),
     h('button', { class: 'btn icon', title: 'New group', 'aria-label': 'New group', onclick: () => app.doc && app.doc.newLayer({ type: 'group' }) }, '📁'),
     h('button', { class: 'btn icon', title: 'New layer (Ctrl+Shift+N)', 'aria-label': 'New layer', onclick: () => app.newLayer() }, '＋'),
     h('button', { class: 'btn icon', title: 'Delete layer', 'aria-label': 'Delete layer', onclick: () => app.doc && app.doc.deleteLayer() }, '🗑'));
@@ -378,10 +416,12 @@ export function buildDock(app) {
   const lay = layersPanel(app);
   const br = brushPanel(app);
   const pBr = panel('brush', 'Brush', { body: br.body, collapsed: true }, app);
+  const adj = adjustPanel(app);
+  const pAdj = panel('adjust', 'Adjustments', { body: adj.body, collapsed: true }, app);
   const pLay = panel('layers', 'Layers', { grow: true, body: lay.body }, app);
   const his = historyPanel(app);
   const pHis = panel('history', 'History', { body: his.body, collapsed: true }, app);
-  dock.append(pColor.el, pPrev.el, pBr.el, pLay.el, pHis.el);
+  dock.append(pColor.el, pPrev.el, pBr.el, pAdj.el, pLay.el, pHis.el);
   lay.refresh(); his.refresh();
-  return { panels: { color: pColor.el, preview: pPrev.el, brush: pBr.el, layers: pLay.el, history: pHis.el }, refreshLayers: lay.refresh, refreshHistory: his.refresh };
+  return { panels: { color: pColor.el, preview: pPrev.el, brush: pBr.el, adjust: pAdj.el, layers: pLay.el, history: pHis.el }, refreshLayers: lay.refresh, refreshHistory: his.refresh };
 }

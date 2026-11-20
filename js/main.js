@@ -1,6 +1,8 @@
 // Effigies: app core. Wires documents, tools, UI, autosave, clipboard, shortcuts and the service worker together.
 import { h, $, toast, debounce, clamp, makeCanvas, ctxOf, canvasToBlob, download, fmtBytes, uid } from './util.js';
-import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers } from './doc.js';
+import { ADJ, ADJ_ORDER, NO_DIALOG, cloneParams, autoLevels, histogram, runAdjust } from './adjust.js';
+import { buildEditor } from './adjust-ui.js';
+import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers, canMask } from './doc.js';
 import { Viewport } from './viewport.js';
 import { selectAll, invertSel, featherSel, growSel, selRect } from './select.js';
 import { createTools } from './tools.js';
@@ -11,7 +13,7 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.2.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.3.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -94,7 +96,7 @@ app.reorderDoc = (id, beforeId) => {
   const i = app.docs.findIndex((d) => d.id === id), j = app.docs.findIndex((d) => d.id === beforeId); if (i < 0 || j < 0) return;
   const [d] = app.docs.splice(i, 1); app.docs.splice(j, 0, d); app.emit('tabs'); saveSession();
 };
-app.memoryEstimate = () => { let n = 0; for (const d of app.docs) n += d.estimateBytes() + d.hist.bytes; if (app.doc && app.doc.live) n += app.doc.live.canvas.width * app.doc.live.canvas.height * 4; return n; };
+app.memoryEstimate = () => { let n = 0; for (const d of app.docs) n += d.estimateBytes() + d.hist.bytes; if (app.doc && app.doc.live && app.doc.live.canvas) n += app.doc.live.canvas.width * app.doc.live.canvas.height * 4; return n; };
 async function confirmMemory(extra) {
   if (app.memoryEstimate() + extra < 1.8e9) return true;
   return !!(await confirmDialog(`This needs about ${fmtBytes(extra)} more and you are already near ${fmtBytes(app.memoryEstimate())}. A 4 GB Chromebook may reload the page. Continue anyway?`, 'Continue', 'Low on memory'));
@@ -281,9 +283,58 @@ A.growSel = async (dir) => {
 A.cropToSel = () => { const d = app.doc; if (!d || !d.sel) { toast('Make a selection first, or use the Crop tool.'); return; } const r = selRect(d.sel); d.cropTo({ x: Math.max(0, r.x), y: Math.max(0, r.y), w: r.w, h: r.h }, false); };
 A.clearSel = () => { const d = app.doc; if (d && d.active) { if (!d.clearLayer(d.active)) toast('That layer cannot be cleared (group or locked).'); } };
 // masks
-A.maskAdd = (kind) => { const d = app.doc, L = d && d.active; if (!L || L.type !== 'raster') { toast('Select a regular layer first.'); return; } if (L.mask) { toast('That layer already has a mask.'); return; } d.addMask(L, kind); app.emit('docchange', { tree: true }); };
+A.maskAdd = (kind) => { const d = app.doc, L = d && d.active; if (!canMask(L)) { toast('Select a regular or adjustment layer first.'); return; } if (L.mask) { toast('That layer already has a mask.'); return; } d.addMask(L, kind); app.emit('docchange', { tree: true }); };
 A.maskDelete = () => { const d = app.doc; if (d && d.active && d.active.mask) { d.deleteMask(d.active, false); } };
 A.maskApply = () => { const d = app.doc; if (d && d.active && d.active.mask) { d.deleteMask(d.active, true); } };
+
+// ── adjustments ──
+A.newAdjustLayer = (id) => {
+  const d = app.doc; if (!d) return;
+  const L = d.addAdjustment(id); if (L) { app.dockEls.adjust && app.dockEls.adjust.setCollapsed(false); app.emit('docchange', { tree: true }); }
+};
+A.adjustMenu = () => { app.dockEls.adjust && app.dockEls.adjust.setCollapsed(false); };
+A.clipToggle = () => {
+  const d = app.doc, L = d && d.active; if (!L) return;
+  if (!d.setClip(L, !L.clip)) toast(L.clip ? 'Could not release.' : 'Clip to a regular layer or group; there is none directly below.');
+};
+A.clipCreate = () => { const d = app.doc, L = d && d.active; if (L && !L.clip && !d.setClip(L, true)) toast('Clip to a regular layer or group; there is none directly below.'); };
+A.clipRelease = () => { const d = app.doc, L = d && d.active; if (L && L.clip) d.setClip(L, false); };
+
+/** Destructive adjustment of the active layer (or its mask), with a live preview. */
+A.imageAdjust = async (id, preset) => {
+  const d = app.doc, L = d && d.active, def = ADJ[id];
+  if (!d || !L) return;
+  if (L.type !== 'raster') { toast(L && L.type === 'adjust' ? 'Use the Adjustments panel to edit an adjustment layer.' : 'Select a regular layer first.'); return; }
+  if (L.editMask && L.mask) {
+    if (id === 'invert') { d.invertMask(L); return; }
+    toast('Only Invert works on a layer mask.'); return;
+  }
+  if (L.lockPix || L.lockAll) { toast('That layer is locked.'); return; }
+  if (!L.canvas) { toast('That layer is empty.'); return; }
+  const params = preset || def.defaults();
+  if (id === 'gradientMap') { params.fg = app.fg; params.bg = app.bg; }
+  if (NO_DIALOG.has(id)) { d.applyAdjustment(L, id, params); return; }
+  const adj = { id, params };
+  let histCache = null;
+  const getHistogram = () => histCache || (histCache = histogram(L.canvas.getContext('2d').getImageData(0, 0, L.canvas.width, L.canvas.height).data));
+  const refreshView = () => app.vp.invalidate();
+  const editor = buildEditor(id, params, { onInput: refreshView, onChange: refreshView, getHistogram });
+  const prev = h('label', { class: 'adj-row chk' }, 'Preview ');
+  const pc = h('input', { type: 'checkbox' }); pc.checked = true; prev.prepend(pc);
+  const reset = h('button', { class: 'btn', onclick: () => { Object.assign(params, def.defaults()); if (id === 'gradientMap') { params.fg = app.fg; params.bg = app.bg; } editor.refresh(); refreshView(); } }, 'Reset');
+  const setLive = () => { d.live = pc.checked ? { layer: L, preview: { adj, sel: d.sel } } : null; refreshView(); };
+  pc.onchange = setLive; setLive();
+  const body = h('div', { class: 'adj-dialog' }, editor, h('div', { class: 'adj-row' }, prev, reset));
+  const ok = await openDialog({ title: def.name, body, ok: 'OK', width: 340, collect: () => true });
+  d.live = null; refreshView();
+  if (ok) d.applyAdjustment(L, id, params);
+};
+A.autoTone = (perChannel) => {
+  const d = app.doc, L = d && d.active; if (!L || L.type !== 'raster' || !L.canvas) { toast('Select a regular layer first.'); return; }
+  const p = autoLevels(L.canvas.getContext('2d').getImageData(0, 0, L.canvas.width, L.canvas.height).data, perChannel);
+  d.applyAdjustment(L, 'levels', p, perChannel ? 'Auto Tone' : 'Auto Contrast');
+};
+
 A.maskInvert = () => { const d = app.doc; if (d && d.active && d.active.mask) d.invertMask(d.active); };
 A.maskToggle = () => { const d = app.doc; if (d && d.active && d.active.mask) d.toggleMask(d.active); };
 A.editTarget = (mask) => { const d = app.doc, L = d && d.active; if (!L) return; L.editMask = !!(mask && L.mask); app.emit('docchange', { tree: true, skipRender: true }); };
@@ -314,7 +365,7 @@ A.toggleGuide = (k, cycle) => {
 };
 A.togglePanel = (id) => app.dockEls[id].setCollapsed(!app.dockEls[id].classList.contains('collapsed'));
 A.togglePanels = () => document.body.classList.toggle('panels-hidden');
-A.resetPanels = () => { for (const [id, el] of Object.entries(app.dockEls)) el.setCollapsed(id === 'history' || id === 'brush'); document.body.classList.remove('panels-hidden'); };
+A.resetPanels = () => { for (const [id, el] of Object.entries(app.dockEls)) el.setCollapsed(id === 'history' || id === 'brush' || id === 'adjust'); document.body.classList.remove('panels-hidden'); };
 A.setTheme = (t) => applyTheme(t, true);
 A.swapColors = () => { const f = app.fg; app.fg = app.bg; app.bg = f; app.savePrefs(); app.emit('color'); };
 A.resetColors = () => { app.fg = '#000000'; app.bg = '#ffffff'; app.savePrefs(); app.emit('color'); };
@@ -380,12 +431,13 @@ document.addEventListener('keydown', (e) => {
     const map = {
       n: () => (sh ? A.newLayer() : A.newDoc()), o: A.openImage, w: () => A.closeDoc(), s: () => (sh ? A.exportProject() : A.saveNow()),
       z: () => (alt ? A.undo() : sh ? A.redo() : (app.prefs.undoMode === 'cs5' ? A.undoToggle() : A.undo())),
-      y: A.redo, j: A.viaCopy, g: () => (sh ? A.ungroup() : A.group()), e: () => (sh ? A.mergeVisible() : A.mergeDown()),
+      y: A.redo, j: A.viaCopy, g: () => (alt ? A.clipToggle() : sh ? A.ungroup() : A.group()), e: () => (sh ? A.mergeVisible() : A.mergeDown()),
       c: () => A.copy(sh), x: () => A.cut(),
       '=': () => A.zoom(1), '+': () => A.zoom(1), '-': () => A.zoom(-1), _: () => A.zoom(-1), '0': A.fit, '1': A.actual,
       '[': () => A.arrange(sh ? 'back' : 'backward'), ']': () => A.arrange(sh ? 'front' : 'forward'), '{': () => A.arrange('back'), '}': () => A.arrange('front'),
       Backspace: () => A.fill('bg'),
-      a: () => A.selectAll(), d: () => (sh ? A.reselect() : A.deselect()), i: () => { if (sh) A.inverseSel(); },
+      a: () => A.selectAll(), d: () => (sh ? A.reselect() : A.deselect()), i: () => (sh ? A.inverseSel() : A.imageAdjust('invert')),
+      l: () => A.imageAdjust('levels'), m: () => A.imageAdjust('curves'), b: () => A.imageAdjust('colorBalance'), u: () => (sh ? A.imageAdjust('desaturate') : A.imageAdjust('hueSat')),
     };
     if (lk === 'v') return; // let the paste event fire
     const fn = map[lk] || map[k];

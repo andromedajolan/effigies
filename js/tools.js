@@ -77,7 +77,8 @@ class StrokeTool {
     const doc = this.app.doc; if (!doc) return null;
     const L = doc.active;
     if (!L) { toast('Add or select a layer first.'); return null; }
-    if (L.type !== 'raster') { toast('Select a regular layer (a group has no pixels).'); return null; }
+    if (L.type === 'adjust') doc.paintableMask(L);
+    else if (L.type !== 'raster') { toast('Select a regular layer (a group has no pixels).'); return null; }
     if (!L.visible) { toast('That layer is hidden.'); return null; }
     if (L.editMask && L.mask) return L;
     if (L.lockAll || L.lockPix) { toast('That layer is locked.'); return null; }

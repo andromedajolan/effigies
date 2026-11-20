@@ -54,7 +54,7 @@ export function saveDoc(doc) {
     const db = await open();
     // 1. layer pixels (only layers that changed since their last save)
     for (const L of doc.allLayers()) {
-      if (L.type === 'raster' && L.mask && L.savedMver !== L.mver) {
+      if (L.type !== 'group' && L.mask && L.savedMver !== L.mver) {
         const v = L.mver, blob = await canvasToBlob(L.mask.canvas);
         const tx = db.transaction('blobs', 'readwrite'); tx.objectStore('blobs').put(blob, `${doc.id}|${L.id}|m${v}`); await txDone(tx);
         L.savedMver = v;

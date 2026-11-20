@@ -1,6 +1,8 @@
 // Window chrome: menu bar, application bar, toolbox, options bar, document tabs, status bar.
 import { h, $, fmtBytes, clamp } from './util.js';
 import { BLEND_LABEL } from './blend.js';
+import { canMask } from './doc.js';
+import { ADJ, ADJ_ORDER, NO_DIALOG } from './adjust.js';
 
 // ───────────── menus ─────────────
 let openPop = null, openTop = null;
@@ -13,7 +15,7 @@ function popup(items, x, y, app, depth = 0) {
     const enabled = it.stage ? false : (it.enabled ? it.enabled() : true);
     const checked = it.checked ? it.checked() : false;
     const label = typeof it.label === 'function' ? it.label() : it.label;
-    const el = h('div', { class: 'menu-item' + (enabled ? '' : ' disabled') + (it.checked ? ' check' + (checked ? ' on' : '') : '') + (it.sub ? ' sub' : ''), role: 'menuitem', title: it.stage ? `Arrives in stage ${it.stage}` : '' },
+    const el = h('div', { class: 'menu-item' + (enabled ? '' : ' disabled') + (it.checked ? ' check' + (checked ? ' on' : '') : '') + (it.sub ? ' sub' : ''), role: 'menuitem', title: it.tip || (it.stage ? `Arrives in stage ${it.stage}` : '') },
       h('span', null, label), it.key ? h('span', { class: 'key' }, it.key) : null);
     if (it.sub && enabled) {
       let child = null;
@@ -65,7 +67,15 @@ export function buildMenus(app) {
       { label: 'Preferences…', run: A.prefs },
     ]],
     ['Image', () => [
-      { label: 'Adjustments', stage: 3, sub: [] },
+      { label: 'Adjustments', enabled: lay, sub: [
+        ...ADJ_ORDER.slice(0, 11).map((id) => ({ label: ADJ[id].name + (NO_DIALOG.has(id) ? '' : '…'), key: ({ levels: 'Ctrl+L', curves: 'Ctrl+M', hueSat: 'Ctrl+U', colorBalance: 'Ctrl+B' })[id], run: () => A.imageAdjust(id) })),
+        '---',
+        ...['invert', 'posterize', 'threshold', 'desaturate'].map((id) => ({ label: ADJ[id].name + (NO_DIALOG.has(id) ? '' : '…'), key: ({ invert: 'Ctrl+I', desaturate: 'Ctrl+Shift+U' })[id], run: () => A.imageAdjust(id) })),
+        '---',
+        { label: 'Auto Tone', run: () => A.autoTone(true) }, { label: 'Auto Contrast', run: () => A.autoTone(false) },
+        '---',
+        ...['Selective Color', 'Shadows/Highlights', 'Match Color', 'Replace Color', 'Equalize', 'Variations', 'HDR Toning'].map((n) => ({ label: n, stage: 3, tip: 'Not included yet' })),
+      ] },
       '---',
       { label: 'Image Size…', run: A.imageSize, enabled: has }, { label: 'Canvas Size…', run: A.canvasSize, enabled: has },
       { label: 'Image Rotation', enabled: has, sub: [
@@ -84,16 +94,17 @@ export function buildMenus(app) {
       '---',
       { label: 'Layer Style', stage: 3 },
       { label: 'Layer Mask', enabled: lay, sub: [
-        { label: 'Reveal All', run: () => A.maskAdd('reveal'), enabled: () => lay() && lay().type === 'raster' && !lay().mask },
-        { label: 'Hide All', run: () => A.maskAdd('hide'), enabled: () => lay() && lay().type === 'raster' && !lay().mask },
-        { label: 'Reveal Selection', run: () => A.maskAdd('revealSel'), enabled: () => lay() && lay().type === 'raster' && !lay().mask && !!app.doc.sel },
-        { label: 'Hide Selection', run: () => A.maskAdd('hideSel'), enabled: () => lay() && lay().type === 'raster' && !lay().mask && !!app.doc.sel },
+        { label: 'Reveal All', run: () => A.maskAdd('reveal'), enabled: () => lay() && canMask(lay()) && !lay().mask },
+        { label: 'Hide All', run: () => A.maskAdd('hide'), enabled: () => lay() && canMask(lay()) && !lay().mask },
+        { label: 'Reveal Selection', run: () => A.maskAdd('revealSel'), enabled: () => lay() && canMask(lay()) && !lay().mask && !!app.doc.sel },
+        { label: 'Hide Selection', run: () => A.maskAdd('hideSel'), enabled: () => lay() && canMask(lay()) && !lay().mask && !!app.doc.sel },
         '---',
         { label: () => (lay() && lay().maskOn === false ? 'Enable' : 'Disable'), run: A.maskToggle, enabled: () => lay() && !!lay().mask },
         { label: 'Invert Mask', run: A.maskInvert, enabled: () => lay() && !!lay().mask },
         { label: 'Apply Layer Mask', run: A.maskApply, enabled: () => lay() && !!lay().mask },
         { label: 'Delete', run: A.maskDelete, enabled: () => lay() && !!lay().mask }] },
-      { label: 'Create Clipping Mask', stage: 3 },
+      { label: 'New Adjustment Layer', enabled: has, sub: ADJ_ORDER.map((id) => ({ label: ADJ[id].name, run: () => A.newAdjustLayer(id) })) },
+      { label: () => (lay() && lay().clip ? 'Release Clipping Mask' : 'Create Clipping Mask'), key: 'Ctrl+Alt+G', run: A.clipToggle, enabled: lay },
       '---',
       { label: 'Group Layers', key: 'Ctrl+G', run: A.group, enabled: lay },
       { label: 'Ungroup Layers', key: 'Ctrl+Shift+G', run: A.ungroup, enabled: () => lay() && lay().type === 'group' },
@@ -128,7 +139,7 @@ export function buildMenus(app) {
       { label: 'Rulers and Guides', stage: 3 },
     ]],
     ['Window', () => [
-      ...['color', 'preview', 'brush', 'layers', 'history'].map((id) => ({ label: { color: 'Color / Swatches', preview: 'Preview', brush: 'Brush', layers: 'Layers', history: 'History' }[id], checked: () => !app.dockEls[id].classList.contains('collapsed'), run: () => A.togglePanel(id) })),
+      ...['color', 'preview', 'brush', 'adjust', 'layers', 'history'].map((id) => ({ label: { color: 'Color / Swatches', preview: 'Preview', brush: 'Brush', adjust: 'Adjustments', layers: 'Layers', history: 'History' }[id], checked: () => !app.dockEls[id].classList.contains('collapsed'), run: () => A.togglePanel(id) })),
       '---',
       { label: 'Hide / Show All Panels', key: 'Tab', run: A.togglePanels },
       { label: 'Reset Panels', run: A.resetPanels },

@@ -40,7 +40,7 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 ```json
 {
   "id": "string",
-  "type": "raster | group",
+  "type": "raster | group | adjust",
   "name": "string",
   "visible": true,
   "opacity": 1,
@@ -54,6 +54,8 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
     "enabled": true,
     "image": "data:image/png;base64,..."
   },
+  "clip": false,
+  "adjustment": { "id": "levels", "params": { } },
   "collapsed": false,
   "children": []
 }
@@ -61,6 +63,8 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `mask` is optional (raster layers only). Its `image` is a PNG where the **alpha channel is how much of the layer is hidden** (0 = fully shown, 255 = fully hidden); the colour channels are always black. `x`, `y` are relative to the layer's own `x`, `y`, so the mask moves with its layer. Outside the mask rectangle the layer is fully shown. `enabled: false` means the mask is kept but not applied.
 
+- `type: "adjust"` is an adjustment layer: it has no `image`; it changes everything below it (or inside its group if the group is isolated). `adjustment.id` is one of `brightnessContrast, levels, curves, exposure, vibrance, hueSat, colorBalance, blackWhite, photoFilter, channelMixer, gradientMap, invert, desaturate, posterize, threshold`. `adjustment.params` is that adjustment's settings object (plain JSON numbers, booleans, strings and arrays; unknown ids should be kept untouched and shown as a hidden-effect placeholder). `opacity` scales its strength; `fill` and `blend` are not used. It may have a `mask` like a raster layer.
+- `clip: true` clips the layer to the nearest layer below it that is not itself clipped (its "base"): the layer is only visible where the base has pixels, and keeps its own blend mode and opacity. Optional; omitted means false. A layer cannot be clipped to an adjustment layer.
 - `image` is the layer's pixel rectangle at offset (`x`, `y`) in document space; `null` when empty. Groups have no `image`, but have `children` (bottom to top) and `collapsed`.
 - `blend` is one of 27 mode ids (normal, dissolve, darken, multiply, colorBurn, linearBurn, darkerColor, lighten, screen, colorDodge, linearDodge, lighterColor, overlay, softLight, hardLight, vividLight, linearLight, pinLight, hardMix, difference, exclusion, subtract, divide, hue, saturation, color, luminosity).
 
@@ -68,7 +72,7 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `version` is an integer. Additive changes (new optional fields) keep the version. Breaking changes bump it.
 - Importers must ignore unknown fields and refuse a newer `version` with a clear message.
-- Stage 2 added the optional `mask` field (still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
+- Stage 2 added the optional `mask` field (still version 1). Stage 3A added `type: "adjust"`, `adjustment` and `clip` (still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
 
 ## Size note
 
