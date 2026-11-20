@@ -1,5 +1,5 @@
 // Offline cache for Effigies. Bump VERSION on every release (it must match APP_VERSION in js/main.js).
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 const CACHE = 'effigies-cache-' + VERSION;
 const ASSETS = [
   './',
@@ -30,6 +30,10 @@ const ASSETS = [
   'js/transform.js',
   'js/filters.js',
   'js/retouch.js',
+  'js/psd.js',
+  'js/psd-io.js',
+  'js/abr.js',
+  'js/brushes.js',
   'fonts/abril-fatface-400.woff2',
   'fonts/alfa-slab-one-400.woff2',
   'fonts/anton-400.woff2',
