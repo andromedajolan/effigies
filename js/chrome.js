@@ -3,6 +3,7 @@ import { h, $, fmtBytes, clamp } from './util.js';
 import { BLEND_LABEL } from './blend.js';
 import { canMask } from './doc.js';
 import { ADJ, ADJ_ORDER, NO_DIALOG } from './adjust.js';
+import { FILTERS, FILTER_CATS } from './filters.js';
 
 // ───────────── menus ─────────────
 let openPop = null, openTop = null;
@@ -137,7 +138,12 @@ export function buildMenus(app) {
       { label: 'Modify', enabled: () => has() && !!app.doc.sel, sub: [
         { label: 'Expand…', run: () => A.growSel(1) }, { label: 'Contract…', run: () => A.growSel(-1) }] },
     ]],
-    ['Filter', () => [{ label: 'Filters', stage: 4 }]],
+    ['Filter', () => [
+      { label: () => (app.lastFilter ? 'Last Filter: ' + FILTERS[app.lastFilter.id].name : 'Last Filter'), key: 'Ctrl+F', run: () => A.lastFilter(false), enabled: () => lay() && !!app.lastFilter },
+      { label: 'Last Filter Settings…', key: 'Ctrl+Alt+F', run: () => A.lastFilter(true), enabled: () => lay() && !!app.lastFilter },
+      '---',
+      ...FILTER_CATS.map((cat) => ({ label: cat, enabled: lay, sub: Object.entries(FILTERS).filter(([, f]) => f.cat === cat).map(([id, f]) => ({ label: f.name + (f.noDialog ? '' : '…'), run: () => A.filter(id) })) })),
+    ]],
     ['View', () => [
       { label: 'Zoom In', key: 'Ctrl++', run: () => A.zoom(1), enabled: has }, { label: 'Zoom Out', key: 'Ctrl+−', run: () => A.zoom(-1), enabled: has },
       { label: 'Fit on Screen', key: 'Ctrl+0', run: A.fit, enabled: has }, { label: 'Actual Pixels', key: 'Ctrl+1', run: A.actual, enabled: has },

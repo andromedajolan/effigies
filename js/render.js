@@ -3,6 +3,7 @@
 import { blendBuffers } from './blend.js';
 import { ctxOf } from './util.js';
 import { runAdjust } from './adjust.js';
+import { runFilter } from './filters.js';
 import { activeStyles, styleExtent, applyStyles } from './styles.js';
 
 const pool = new Map();
@@ -78,10 +79,11 @@ function drawRaster(L, g, tf, W, H, live, org, ov = null) {
     sg.drawImage(live.show || live.canvas, live.ox, live.oy);
     sg.globalAlpha = 1; sg.globalCompositeOperation = 'source-over';
   }
-  if (pv) {   // live preview of a destructive adjustment (dialog open)
+  if (pv) {   // live preview of a destructive adjustment or filter (dialog open)
     const im = sg.getImageData(0, 0, rw, rh), d = im.data, orig = pv.sel ? new Uint8ClampedArray(d) : null;
     sg.setTransform(1, 0, 0, 1, 0, 0);
-    runAdjust(pv.adj.id, d, pv.adj.params);
+    if (pv.filter) runFilter(pv.filter.id, im, pv.filter.params, z, { u0: (x0 - tf.tx) / z - L.x, v0: (y0 - tf.ty) / z - L.y, k: 1 / z, aw: L.w, ah: L.h, fg: pv.fg, bg: pv.bg });
+    else runAdjust(pv.adj.id, d, pv.adj.params);
     if (pv.sel) {
       const T = takeCanvas(rw, rh), tg = ctxOf(T); tg.setTransform(z, 0, 0, z, tf.tx - x0, tf.ty - y0); tg.imageSmoothingEnabled = smooth; tg.drawImage(pv.sel.canvas, pv.sel.x, pv.sel.y);
       const sa = tg.getImageData(0, 0, rw, rh).data; releaseCanvas(T);

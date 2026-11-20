@@ -2,6 +2,7 @@
 import { h, $, toast, debounce, clamp, makeCanvas, ctxOf, canvasToBlob, download, fmtBytes, uid } from './util.js';
 import { ADJ, ADJ_ORDER, NO_DIALOG, cloneParams, autoLevels, histogram, runAdjust } from './adjust.js';
 import { buildEditor } from './adjust-ui.js';
+import { FILTERS } from './filters.js';
 import { openStyleDialog } from './styles-ui.js';
 import { initPatterns, patternEvents } from './patterns.js';
 import { Guides } from './guides.js';
@@ -18,7 +19,7 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.6.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.7.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, rulers: false, guidesShow: true, guidesLock: false, snap: true, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -340,6 +341,33 @@ A.imageAdjust = async (id, preset) => {
   d.live = null; refreshView();
   if (ok) d.applyAdjustment(L, id, params);
 };
+A.filter = async (id, reopen, direct) => {
+  const d = app.doc, L = d && d.active, F = FILTERS[id];
+  if (!d || !L || !F) return;
+  if (L.type !== 'raster') { toast('Select a regular layer first.'); return; }
+  if (L.editMask && L.mask) { toast('Filters work on layer pixels, not masks.'); return; }
+  if (L.lockPix || L.lockAll) { toast('That layer is locked.'); return; }
+  if (!L.canvas && !(F.usesColors || F.fills)) { toast('That layer is empty.'); return; }
+  const colors = { fg: app.fg, bg: app.bg };
+  const last = app.lastFilter && app.lastFilter.id === id ? app.lastFilter.params : null;
+  const params = Object.assign(F.defaults(), reopen && last ? JSON.parse(JSON.stringify(last)) : {});
+  if (direct) { if (d.applyFilter(L, id, params, F.name, colors)) app.lastFilter = { id, params }; return; }
+  if (F.noDialog) { if (d.applyFilter(L, id, params, F.name, colors)) app.lastFilter = { id, params }; return; }
+  if (F.usesColors || F.fills) { const sr = d.sel ? selRect(d.sel) : { x: 0, y: 0, w: d.w, h: d.h }; L.ensureRect(sr.x, sr.y, sr.x + sr.w, sr.y + sr.h); }
+  const refresh = () => app.vp.invalidate();
+  let t = 0; const refreshSoon = () => { clearTimeout(t); t = setTimeout(refresh, 30); };
+  const editor = buildEditor(F, params, { onInput: refreshSoon, onChange: refresh });
+  const pc = h('input', { type: 'checkbox' }); pc.checked = true;
+  const prev = h('label', { class: 'adj-row chk' }, pc, ' Preview ');
+  const reset = h('button', { class: 'btn', onclick: () => { Object.assign(params, F.defaults()); editor.refresh(); refresh(); } }, 'Reset');
+  const setLive = () => { d.live = pc.checked ? { layer: L, preview: { filter: { id, params }, sel: d.sel, ...colors } } : null; refresh(); };
+  pc.onchange = setLive; setLive();
+  const body = h('div', { class: 'adj-dialog' }, editor, h('div', { class: 'adj-row' }, prev, reset), h('small', null, 'The preview is approximate when zoomed out; the final result is computed at full size.'));
+  const ok = await openDialog({ title: F.name, body, ok: 'OK', width: 360, collect: () => true });
+  d.live = null; refresh();
+  if (ok) { app.lastFilter = { id, params: JSON.parse(JSON.stringify(params)) }; toast(`Applying ${F.name}…`, 1200); await new Promise((r) => setTimeout(r, 30)); d.applyFilter(L, id, params, F.name, colors); }
+};
+A.lastFilter = (reopen) => { if (app.lastFilter) A.filter(app.lastFilter.id, true, !reopen); else toast('No filter has been used yet.'); };
 A.autoTone = (perChannel) => {
   const d = app.doc, L = d && d.active; if (!L || L.type !== 'raster' || !L.canvas) { toast('Select a regular layer first.'); return; }
   const p = autoLevels(L.canvas.getContext('2d').getImageData(0, 0, L.canvas.width, L.canvas.height).data, perChannel);
@@ -471,7 +499,7 @@ document.addEventListener('keydown', (e) => {
       '=': () => A.zoom(1), '+': () => A.zoom(1), '-': () => A.zoom(-1), _: () => A.zoom(-1), '0': A.fit, '1': A.actual,
       '[': () => A.arrange(sh ? 'back' : 'backward'), ']': () => A.arrange(sh ? 'front' : 'forward'), '{': () => A.arrange('back'), '}': () => A.arrange('front'),
       Backspace: () => A.fill('bg'),
-      t: A.freeTransform, r: A.toggleRulers, ';': () => (sh ? A.toggleSnap() : A.toggleGuides()),
+      f: () => (alt ? A.lastFilter(true) : A.lastFilter(false)), t: A.freeTransform, r: A.toggleRulers, ';': () => (sh ? A.toggleSnap() : A.toggleGuides()),
       a: () => A.selectAll(), d: () => (sh ? A.reselect() : A.deselect()), i: () => (sh ? A.inverseSel() : A.imageAdjust('invert')),
       l: () => A.imageAdjust('levels'), m: () => A.imageAdjust('curves'), b: () => A.imageAdjust('colorBalance'), u: () => (sh ? A.imageAdjust('desaturate') : A.imageAdjust('hueSat')),
     };

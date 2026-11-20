@@ -3,6 +3,7 @@ import { uid, makeCanvas, ctxOf, rectUnion, rectIntersect } from './util.js';
 import { ADJ, runAdjust, cloneParams } from './adjust.js';
 import { selRect } from './select.js';
 import { cloneStyles } from './styles.js';
+import { FILTERS, runFilter } from './filters.js';
 import { renderText } from './type.js';
 
 export const canMask = (L) => !!L && (L.type === 'raster' || L.type === 'adjust');
@@ -662,6 +663,32 @@ export class Doc {
     });
   }
 
+  /** Run a filter over the layer (limited to the selection, which may be feathered). ctx may carry fg/bg colours. */
+  applyFilter(L, id, params, name, ctxExtra = {}) {
+    const F = FILTERS[id];
+    if (!F || !L || L.type !== 'raster') return false;
+    if (L.lockPix || L.lockAll) return false;
+    if (F.usesColors || F.fills) { const sr = this.sel ? selRect(this.sel) : { x: 0, y: 0, w: this.w, h: this.h }; L.ensureRect(sr.x, sr.y, sr.x + sr.w, sr.y + sr.h); }
+    if (!L.canvas) return false;
+    const area = L.bounds(), sel = this.sel;
+    let rect = area;
+    if (sel) {
+      const r = selRect(sel), pad = Math.ceil(F.reach ? Math.min(F.reach(params), 4000) : 0);
+      rect = rectIntersect(area, { x: r.x - pad, y: r.y - pad, w: r.w + 2 * pad, h: r.h + 2 * pad });
+      if (!rect) return false;
+    }
+    this.editPixels(L, rect, name || F.name, (g, ox, oy) => {
+      const im = g.getImageData(rect.x + ox, rect.y + oy, rect.w, rect.h), d = im.data, orig = sel ? new Uint8ClampedArray(d) : null;
+      runFilter(id, im, params, 1, { u0: rect.x - L.x, v0: rect.y - L.y, k: 1, aw: area.w, ah: area.h, ...ctxExtra });
+      if (sel) {
+        const sc = makeCanvas(rect.w, rect.h, true), sg = ctxOf(sc); sg.drawImage(sel.canvas, sel.x - rect.x, sel.y - rect.y);
+        const sa = sg.getImageData(0, 0, rect.w, rect.h).data;
+        for (let i = 0; i < d.length; i += 4) { const a = sa[i + 3] / 255; if (a < 1) for (let c = 0; c < 4; c++) d[i + c] = orig[i + c] + (d[i + c] - orig[i + c]) * a; }
+      }
+      g.putImageData(im, rect.x + ox, rect.y + oy);
+    });
+    return true;
+  }
   /**
    * Resample a raster layer (and its mask) through an affine map from layer pixels to document space:
    * doc = [a c e; b d f] * (u, v, 1). One undo step. Type layers become ordinary pixels.

@@ -144,7 +144,7 @@ export function buildEditor(adjId, params, cb0 = {}) {
   const cb = { input: cb0.onInput || (() => {}), change: cb0.onChange || (() => {}) };
   const ctx = { getHistogram: cb0.getHistogram };
   const root = h('div', { class: 'adj-editor' }), parts = [];
-  const def = ADJ[adjId];
+  const def = typeof adjId === 'string' ? ADJ[adjId] : adjId;
   for (const c of def.controls) {
     const el = c.type && CUSTOM[c.type] ? CUSTOM[c.type](params, cb, ctx) : simpleControl(c, params, cb);
     parts.push(el); root.appendChild(el);
