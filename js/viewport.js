@@ -180,6 +180,8 @@ export class Viewport {
       g.restore();
     }
     this.drawAnts(g);
+    if (this.app.guides) this.app.guides.drawGuides(g);
+    if (this.app.transform && this.app.transform.active) this.app.transform.drawOverlay(g);
     const tool = this.app.tool;
     if (tool && tool.drawOverlay) tool.drawOverlay(g, this);
     if (this.cursor && tool && tool.ring) {
@@ -237,6 +239,10 @@ export class Viewport {
       this.panning = { x: dev.x, y: dev.y }; this.overlay.style.cursor = 'grabbing'; return;
     }
     if (e.button === 2) return;
+    const T = this.app.transform;
+    if (T && T.active) { this.toolDown = true; T.down(this._ctx(e)); return; }
+    const G = this.app.guides;
+    if (G && this.app.tool && this.app.tool.id === 'move' && G.canvasDown(e, dev)) { this.toolDown = true; this.guideDrag = true; return; }
     this.toolDown = true;
     const t = this.app.tool; if (t && t.down) t.down(this._ctx(e));
   }
@@ -255,15 +261,22 @@ export class Viewport {
       this.gesture = { d, cx, cy }; this.viewChanged(true); return;
     }
     if (this.panning) { this.panBy(dev.x - this.panning.x, dev.y - this.panning.y); this.panning = { x: dev.x, y: dev.y }; return; }
+    const T = this.app.transform, G = this.app.guides;
+    if (G) G.draw();
+    if (T && T.active) { if (this.toolDown) T.move(this._ctx(e)); else T.hover(this._ctx(e)); this.drawOverlay(); return; }
+    if (this.guideDrag) { G.canvasMove(e); this.drawOverlay(); return; }
     const t = this.app.tool;
     if (this.toolDown && t && t.move) t.move(this._ctx(e));
     else if (t && t.hover) t.hover(this._ctx(e));
+    else if (G && t && t.id === 'move') { const gi = G.grab(dev); this.setCursorStyle(gi >= 0 ? (G.list()[gi].o === 'v' ? 'col-resize' : 'row-resize') : (t.cursor || '')); }
     this.drawOverlay();
   }
   _up(e, cancel) {
     this.pointers.delete(e.pointerId);
     if (this.gesture) { if (this.pointers.size < 2) { this.gesture = null; this.invalidate(); } return; }
     if (this.panning) { this.panning = null; this.overlay.style.cursor = ''; this.app.refreshCursor(); this.invalidate(); return; }
+    if (this.guideDrag) { this.guideDrag = false; this.toolDown = false; this.app.guides.canvasUp(e); this.drawOverlay(); return; }
+    if (this.toolDown && this.app.transform && this.app.transform.active) { this.toolDown = false; this.app.transform.up(); return; }
     if (this.toolDown) { this.toolDown = false; const t = this.app.tool; if (t) { if (cancel && t.cancel) t.cancel(); else if (t.up) t.up(this._ctx(e)); } }
     this.drawOverlay();
   }

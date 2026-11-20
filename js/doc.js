@@ -177,6 +177,7 @@ export class Doc {
     this.rev = 0; this.savedRev = -1;
     this.created = Date.now(); this.modified = Date.now();
     this.songRef = null;
+    this.guides = [];       // [{o:'h'|'v', p: doc px}]
     this.seq = 1; this.gseq = 1;
     this.listeners = new Set();
     this.live = null;
@@ -659,6 +660,43 @@ export class Doc {
       g.setTransform(a, b, c, d, e - bx, f - by); g.drawImage(L.canvas, L.x, L.y);
       return { canvas: out, x: bx, y: by };
     });
+  }
+
+  /**
+   * Resample a raster layer (and its mask) through an affine map from layer pixels to document space:
+   * doc = [a c e; b d f] * (u, v, 1). One undo step. Type layers become ordinary pixels.
+   */
+  applyLayerMatrix(L, M, name = 'Free Transform') {
+    if (!L || L.type !== 'raster' || !L.canvas) return false;
+    const [a, b, c, d, e, f] = M, lim = 4;
+    const pt = (u, v) => [a * u + c * v + e, b * u + d * v + f];
+    const box = (w, h, ox, oy) => {
+      const ps = [pt(ox, oy), pt(ox + w, oy), pt(ox, oy + h), pt(ox + w, oy + h)];
+      let x0 = Math.min(...ps.map((q) => q[0])), y0 = Math.min(...ps.map((q) => q[1])), x1 = Math.max(...ps.map((q) => q[0])), y1 = Math.max(...ps.map((q) => q[1]));
+      x0 = Math.max(Math.floor(x0 + 1e-6), -this.w * lim); y0 = Math.max(Math.floor(y0 + 1e-6), -this.h * lim);   // keep memory bounded
+      x1 = Math.min(Math.ceil(x1 - 1e-6), this.w * (lim + 1)); y1 = Math.min(Math.ceil(y1 - 1e-6), this.h * (lim + 1));
+      return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+    };
+    const crisp = [a, b, c, d].every((v) => Math.abs(v - Math.round(v)) < 1e-6);
+    const draw = (src, lx, ly, bx) => {
+      const out = makeCanvas(bx.w, bx.h), g = ctxOf(out);
+      g.imageSmoothingEnabled = !crisp; g.imageSmoothingQuality = 'high';
+      g.setTransform(a, b, c, d, e - bx.x, f - by_(bx)); g.drawImage(src, lx, ly);
+      return out;
+    };
+    const by_ = (bx) => bx.y;
+    const bx = box(L.canvas.width, L.canvas.height, 0, 0);
+    const out = draw(L.canvas, 0, 0, bx);
+    const t = this.begin(name);
+    t.swapPixels(L, out, bx.x, bx.y);
+    if (L.text) t.setProps(L, { text: null });
+    if (L.mask) {
+      const m = L.mask, mb = box(m.canvas.width, m.canvas.height, m.x, m.y);
+      const mo = draw(m.canvas, m.x, m.y, mb);
+      t.setMask(L, { canvas: mo, x: mb.x - bx.x, y: mb.y - bx.y });
+    }
+    t.end();
+    return true;
   }
 
   toCanvas(opts) { return renderFull(this.layers, this.w, this.h, opts); }

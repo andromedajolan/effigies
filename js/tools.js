@@ -232,7 +232,11 @@ class MoveTool {
   get o() { return this.app.opts(this.id, this.defaults); }
   move(c) {
     const d = this.drag; if (!d) return;
-    const nx = d.ox + Math.round(c.x - d.sx), ny = d.oy + Math.round(c.y - d.sy);
+    let nx = d.ox + Math.round(c.x - d.sx), ny = d.oy + Math.round(c.y - d.sy);
+    const G = this.app.guides, L = d.L;
+    if (G && L.canvas && !c.e.ctrlKey) {   // snap the layer's edges and centre to guides and the canvas edge
+      nx += Math.round(G.snap('v', [nx, nx + L.w / 2, nx + L.w])); ny += Math.round(G.snap('h', [ny, ny + L.h / 2, ny + L.h]));
+    }
     if (nx !== d.L.x || ny !== d.L.y) { d.L.x = nx; d.L.y = ny; d.moved = true; this.app.vp.invalidate(); }
     const el = document.elementFromPoint(c.e.clientX, c.e.clientY);
     const tab = el && el.closest && el.closest('.doc-tab');

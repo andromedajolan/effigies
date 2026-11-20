@@ -70,7 +70,7 @@ export function saveDoc(doc) {
     // 2. the record that references them
     const rec = {
       id: doc.id, name: doc.name, w: doc.w, h: doc.h, created: doc.created, modified: doc.modified,
-      view: { ...doc.view }, activeId: doc.activeId, seq: doc.seq, gseq: doc.gseq, songRef: doc.songRef,
+      view: { ...doc.view }, activeId: doc.activeId, seq: doc.seq, gseq: doc.gseq, songRef: doc.songRef, guides: doc.guides || [],
       layers: treeRecord(doc.id, doc.layers),
     };
     const keep = new Set(); collectKeys(rec.layers, keep);
@@ -133,7 +133,7 @@ export async function loadDoc(id) {
   if (!rec) return null;
   const doc = new Doc({ id: rec.id, name: rec.name, w: rec.w, h: rec.h });
   doc.created = rec.created; doc.modified = rec.modified; doc.view = { ...rec.view, fit: !!rec.view.fit };
-  doc.seq = rec.seq || 1; doc.gseq = rec.gseq || 1; doc.songRef = rec.songRef || null;
+  doc.seq = rec.seq || 1; doc.gseq = rec.gseq || 1; doc.songRef = rec.songRef || null; doc.guides = Array.isArray(rec.guides) ? rec.guides : [];
   doc.layers = await layersFromRecord(db, rec.layers);
   doc.activeId = rec.activeId && doc.find(rec.activeId) ? rec.activeId : (doc.layers.length ? doc.layers[doc.layers.length - 1].id : null);
   doc.savedRev = doc.rev;

@@ -33,6 +33,7 @@ export async function exportProject(doc, appVersion) {
     projectId: doc.id, name: doc.name, created: new Date(doc.created).toISOString(), modified: new Date(doc.modified).toISOString(),
     width: doc.w, height: doc.h, colorMode: 'RGB', bitDepth: 8,
     activeLayerId: doc.activeId, songRef: doc.songRef || null,
+    guides: (doc.guides || []).map((g) => ({ orientation: g.o === 'h' ? 'horizontal' : 'vertical', position: g.p })),
     layers: await enc(doc.layers),
   };
   const used = new Set();
@@ -68,6 +69,7 @@ export async function importProject(text, { newId = false } = {}) {
   const doc = new Doc({ id: newId ? uid() : p.projectId, name: p.name || 'Untitled', w: p.width, h: p.height });
   if (p.created) doc.created = Date.parse(p.created) || doc.created;
   doc.songRef = p.songRef || null;
+  doc.guides = Array.isArray(p.guides) ? p.guides.filter((g) => g && Number.isFinite(g.position)).map((g) => ({ o: g.orientation === 'horizontal' ? 'h' : 'v', p: g.position })) : [];
   const dec = async (list) => {
     const out = [];
     for (const o of list) {

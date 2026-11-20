@@ -4,6 +4,8 @@ import { ADJ, ADJ_ORDER, NO_DIALOG, cloneParams, autoLevels, histogram, runAdjus
 import { buildEditor } from './adjust-ui.js';
 import { openStyleDialog } from './styles-ui.js';
 import { initPatterns, patternEvents } from './patterns.js';
+import { Guides } from './guides.js';
+import { FreeTransform, layerTurn } from './transform.js';
 import { activeStyles, styleExtent, cloneStyles } from './styles.js';
 import { Doc, Layer, cloneLayer, cloneCanvas, walkLayers, canMask } from './doc.js';
 import { Viewport } from './viewport.js';
@@ -16,10 +18,10 @@ import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, pe
 import { exportProject, importProject } from './project.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.5.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.6.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
-const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
+const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, rulers: false, guidesShow: true, guidesLock: false, snap: true, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
 
 const listeners = {};
 const app = {
@@ -58,6 +60,7 @@ app.setBg = (c) => { app.bg = c; app.savePrefs(); app.emit('color'); };
 app.setColorTarget = (t) => { app.colorTarget = t; app.emit('color'); };
 app.setTool = (id, opts = {}) => {
   const t = app.tools[id]; if (!t || t === app.tool) return;
+  if (app.transform && app.transform.active) app.transform.commit();
   if (app.tool && app.tool.cancel) app.tool.cancel();
   app.tool = t; if (!opts.temp) app.groupCurrent[t.group] = id;
   app.refreshCursor(); app.savePrefs(); app.emit('tool', t); app.vp.drawOverlay();
@@ -94,6 +97,7 @@ app.openDoc = (doc, activate = true) => {
 app.switchDoc = (id) => {
   const d = app.docs.find((x) => x.id === id); if (!d) return;
   app.flushPending();
+  if (app.transform && app.transform.active) app.transform.commit();
   if (app.tool && app.tool.cancel) app.tool.cancel();
   app.doc = d; app.vp.setDoc(d);
   app.emit('doc'); app.emit('tabs'); app.vp.drawOverlay();
@@ -213,7 +217,7 @@ A.duplicateDoc = async () => {
   const d = app.doc; if (!d) return;
   if (!(await confirmMemory(d.estimateBytes()))) return;
   const n = new Doc({ name: d.name + ' copy', w: d.w, h: d.h });
-  n.layers = d.layers.map((L) => cloneLayer(L, true, '')); n.seq = d.seq; n.gseq = d.gseq; n.songRef = d.songRef;
+  n.layers = d.layers.map((L) => cloneLayer(L, true, '')); n.seq = d.seq; n.gseq = d.gseq; n.songRef = d.songRef; n.guides = (d.guides || []).map((g) => ({ ...g }));
   // keep the same active position
   const flatOld = d.allLayers(), flatNew = []; walkLayers(n.layers, (L) => flatNew.push(L));
   const idx = flatOld.findIndex((L) => L.id === d.activeId); n.activeId = flatNew[idx] ? flatNew[idx].id : null;
@@ -376,6 +380,19 @@ A.toggleGuide = (k, cycle) => {
   else app.prefs[k] = !app.prefs[k];
   app.savePrefs(); app.emit('prefs'); app.vp.drawOverlay();
 };
+A.freeTransform = () => { if (app.transform.active) return; app.flushPending(); app.transform.start(); };
+A.layerTurn = (k) => layerTurn(app, k);
+A.toggleRulers = () => { app.prefs.rulers = !app.prefs.rulers; app.savePrefs(); app.emit('prefs'); };
+A.toggleGuides = () => { app.prefs.guidesShow = app.prefs.guidesShow === false; app.savePrefs(); app.emit('prefs'); app.vp.drawOverlay(); };
+A.toggleSnap = () => { app.prefs.snap = app.prefs.snap === false; app.savePrefs(); app.emit('prefs'); };
+A.lockGuides = () => { app.prefs.guidesLock = !app.prefs.guidesLock; app.savePrefs(); app.emit('prefs'); };
+A.clearGuides = () => { if (app.doc) app.guides.clear(); };
+A.newGuide = async () => {
+  const d = app.doc; if (!d) return;
+  const sel = h('select', null, h('option', { value: 'v' }, 'Vertical'), h('option', { value: 'h' }, 'Horizontal')), inp = h('input', { type: 'number', value: '0', step: '1' });
+  const v = await openDialog({ title: 'New Guide', body: h('div', null, h('div', { class: 'fld' }, h('label', null, 'Orientation'), sel), h('div', { class: 'fld' }, h('label', null, 'Position'), h('span', { class: 'inline' }, inp, 'px'))), collect: () => ({ o: sel.value, p: Number(inp.value) }) });
+  if (v && Number.isFinite(v.p)) { if (app.prefs.guidesShow === false) A.toggleGuides(); app.guides.add(v.o, v.p); }
+};
 A.togglePanel = (id) => app.dockEls[id].setCollapsed(!app.dockEls[id].classList.contains('collapsed'));
 A.togglePanels = () => document.body.classList.toggle('panels-hidden');
 A.resetPanels = () => { for (const [id, el] of Object.entries(app.dockEls)) el.setCollapsed(id === 'history' || id === 'brush' || id === 'adjust'); document.body.classList.remove('panels-hidden'); };
@@ -434,6 +451,11 @@ document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]')) return;
   if (isTyping(e.target)) return;
   const mod = e.ctrlKey || e.metaKey, k = e.key, lk = k.length === 1 ? k.toLowerCase() : k;
+  if (app.transform && app.transform.active) {
+    if (k === 'Enter') { e.preventDefault(); app.transform.commit(); return; }
+    if (k === 'Escape') { e.preventDefault(); app.transform.cancel(); return; }
+    if (k.startsWith('Arrow')) { e.preventDefault(); const s = e.shiftKey ? 10 : 1; app.transform.nudge(k === 'ArrowLeft' ? -s : k === 'ArrowRight' ? s : 0, k === 'ArrowUp' ? -s : k === 'ArrowDown' ? s : 0); return; }
+  }
   if (k === 'Escape') { closeMenus(); if (app.tool && app.tool.cancel && app.tool.box) app.tool.cancel(); return; }
   if (k === 'Enter' && app.tool && app.tool.enter && app.tool.enter()) { e.preventDefault(); return; }
   if (k === 'Delete' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); A.clearSel(); return; }
@@ -449,6 +471,7 @@ document.addEventListener('keydown', (e) => {
       '=': () => A.zoom(1), '+': () => A.zoom(1), '-': () => A.zoom(-1), _: () => A.zoom(-1), '0': A.fit, '1': A.actual,
       '[': () => A.arrange(sh ? 'back' : 'backward'), ']': () => A.arrange(sh ? 'front' : 'forward'), '{': () => A.arrange('back'), '}': () => A.arrange('front'),
       Backspace: () => A.fill('bg'),
+      t: A.freeTransform, r: A.toggleRulers, ';': () => (sh ? A.toggleSnap() : A.toggleGuides()),
       a: () => A.selectAll(), d: () => (sh ? A.reselect() : A.deselect()), i: () => (sh ? A.inverseSel() : A.imageAdjust('invert')),
       l: () => A.imageAdjust('levels'), m: () => A.imageAdjust('curves'), b: () => A.imageAdjust('colorBalance'), u: () => (sh ? A.imageAdjust('desaturate') : A.imageAdjust('hueSat')),
     };
@@ -521,6 +544,7 @@ async function boot() {
   app.tools = createTools(app);
   app.tool = app.tools[app.prefs.tool] || app.tools.brush;
   app.vp = new Viewport($('#stage'), app);
+  app.guides = new Guides(app); app.transform = new FreeTransform(app);
   patternEvents.onChange = () => { app.emit('patterns'); app.vp.invalidate && app.vp.invalidate(); };
   initPatterns().catch(() => {});
   const dock = buildDock(app); app.dockEls = dock.panels;

@@ -265,3 +265,15 @@ body.panels-hidden #app { grid-template-rows: 26px 30px 0 minmax(0, 1fr); }
 .pat-th.sel{border-color:#5aa0ff}
 .ls-pane{max-height:62vh;overflow:auto;padding-right:6px}
 .ls-list{max-height:62vh;overflow:auto}
+
+/* 3E: rulers, guides, free transform */
+.ruler{position:absolute;z-index:3;background:var(--bg3);touch-action:none}
+#ruler-h{left:18px;top:0;height:18px;cursor:row-resize}
+#ruler-v{left:0;top:18px;width:18px;cursor:col-resize}
+#stage #ruler-h,#stage #ruler-v{inset:auto}
+#stage #ruler-h{left:18px;top:0}
+#stage #ruler-v{left:0;top:18px}
+#ruler-c{position:absolute;left:0;top:0;width:18px;height:18px;z-index:3;background:var(--bg3);border-right:1px solid #0006;border-bottom:1px solid #0006}
+#xf-bar{position:absolute;z-index:5;left:50%;top:26px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;padding:6px 10px;background:var(--bg3);color:var(--fg);border:1px solid #0008;border-radius:4px;box-shadow:0 2px 10px #0006;max-width:92%}
+#xf-bar .xf-f{display:flex;gap:4px;align-items:center}
+#xf-bar small{flex-basis:100%;text-align:center;opacity:.7}

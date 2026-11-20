@@ -28,10 +28,12 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
   "colorMode": "RGB", "bitDepth": 8,
   "activeLayerId": "string",
   "songRef": null,
+  "guides": [ { "orientation": "vertical", "position": 1500 } ],
   "layers": [ /* bottom to top */ ]
 }
 ```
 
+- `guides` (optional): ruler guides, each `{ "orientation": "horizontal"|"vertical", "position": document px }`. Other apps may ignore them.
 - `projectId`: stable identifier other apps can link to.
 - `songRef`: optional string or object supplied by another suite app (for example a Sonorum song id). Effigies keeps it untouched.
 
@@ -81,7 +83,7 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 - `version` is an integer. Additive changes (new optional fields) keep the version. Breaking changes bump it.
 - Importers must ignore unknown fields and refuse a newer `version` with a clear message.
-- Stage 2 added the optional `mask` field (still version 1). Stage 3A added `type: "adjust"`, `adjustment` and `clip`, stage 3B added `text` and `styles`, and stage 3D added the `satin` and `patternOverlay` effects, `contour` settings and top-level `patterns` (all still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
+- Stage 2 added the optional `mask` field (still version 1). Stage 3A added `type: "adjust"`, `adjustment` and `clip`, stage 3B added `text` and `styles`, and stage 3D added the `satin` and `patternOverlay` effects, `contour` settings and top-level `patterns` and stage 3E added the optional top-level `guides` (all still version 1). Later stages add further optional layer fields (styles, adjustments, text) the same way.
 
 ## Pattern library (browser storage)
 
