@@ -6,6 +6,8 @@ import { ADJ, ADJ_ORDER, cloneParams, histogram } from './adjust.js';
 import { buildEditor } from './adjust-ui.js';
 import { openDialog } from './dialogs.js';
 import { brushTip, BRUSH_DEFAULTS, ERASER_DEFAULTS, TIPS } from './tools.js';
+import { listBrushes, brushInfo, importAbr, exportAbr, deleteBrush } from './brushes.js';
+import { download } from './util.js';
 
 const DEFAULT_SWATCHES = ['#000000', '#1a1a1a', '#333333', '#4d4d4d', '#666666', '#808080', '#999999', '#b3b3b3', '#cccccc', '#e6e6e6', '#ffffff',
   '#ff0000', '#ff4d00', '#ff8000', '#ffbf00', '#ffff00', '#bfff00', '#80ff00', '#00ff00', '#00ff80', '#00ffbf', '#00ffff', '#00bfff', '#0080ff', '#0000ff', '#4000ff', '#8000ff', '#bf00ff', '#ff00ff', '#ff0080',
@@ -362,9 +364,32 @@ function brushPanel(app) {
     rows.push(() => { const v = O()[key]; n.value = v; r.value = Math.min(v, +r.max); });
     return row;
   };
-  const tipSel = h('select', { 'aria-label': 'Tip shape' }, TIPS.map(([v, l]) => h('option', { value: v }, l)));
-  tipSel.addEventListener('change', () => { raw().tip = tipSel.value; app.savePrefs(); drawPreview(); });
-  rows.push(() => { tipSel.value = O().tip; });
+  const tipSel = h('select', { 'aria-label': 'Tip shape' });
+  const fillTips = () => {
+    const cur = O().tip; tipSel.textContent = '';
+    for (const [v, l] of TIPS) tipSel.append(h('option', { value: v }, l));
+    const lib = listBrushes();
+    if (lib.length) { const og = h('optgroup', { label: 'Imported (.abr)' }); for (const b of lib) og.append(h('option', { value: 'c:' + b.id }, b.name)); tipSel.append(og); }
+    tipSel.value = cur; if (tipSel.value !== cur) tipSel.value = 'round';
+  };
+  tipSel.addEventListener('change', () => {
+    const o = raw(); o.tip = tipSel.value;
+    const bi = o.tip.startsWith('c:') ? brushInfo(o.tip.slice(2)) : null; if (bi) { o.spacing = bi.spacing; o.hardness = 100; }
+    app.savePrefs(); refresh(); drawPreview(); app.emit('toolopts');
+  });
+  rows.push(() => { fillTips(); });
+  const abrFile = h('input', { type: 'file', accept: '.abr', multiple: true, style: 'display:none' });
+  abrFile.addEventListener('change', async () => {
+    let added = 0, skipped = 0, last = null, bad = 0;
+    for (const f of abrFile.files) { try { const r = await importAbr(await f.arrayBuffer(), f.name.replace(/\.abr$/i, '')); added += r.added; skipped += r.skipped; if (r.ids.length) last = r.ids[r.ids.length - 1]; } catch (e) { bad++; } }
+    abrFile.value = ''; fillTips();
+    if (last) { raw().tip = 'c:' + last; const bi = brushInfo(last); if (bi) { raw().spacing = bi.spacing; raw().hardness = 100; } app.savePrefs(); refresh(); drawPreview(); app.emit('toolopts'); }
+    toast(added ? `Imported ${added} brush tip${added > 1 ? 's' : ''}${skipped ? ` (${skipped} skipped: computed or unreadable brushes have no image)` : ''}.` : bad ? 'That is not a readable .abr file.' : 'No sampled brush tips were found in that file.', 5000);
+  });
+  const abrImp = h('button', { class: 'btn small', type: 'button', title: 'Import Photoshop brush tips (.abr)', onclick: () => abrFile.click() }, 'Import .abr…');
+  const abrExp = h('button', { class: 'btn small', type: 'button', title: 'Export all imported tips as an .abr file', onclick: async () => { if (!listBrushes().length) { toast('Import some brush tips first.'); return; } download(await exportAbr(), 'effigies-brushes.abr'); toast('Exported brush tips.'); } }, 'Export .abr');
+  const abrDel = h('button', { class: 'btn small', type: 'button', title: 'Remove the selected imported tip', onclick: async () => { const t = O().tip; if (!t.startsWith('c:')) { toast('Select an imported tip first.'); return; } await deleteBrush(t.slice(2)); raw().tip = 'round'; app.savePrefs(); fillTips(); drawPreview(); app.emit('toolopts'); } }, 'Remove tip');
+  app.on('brushes', () => { if (tipSel.isConnected) fillTips(); });
   const press = h('input', { type: 'checkbox' });
   press.addEventListener('change', () => { raw().pressure = press.checked; app.savePrefs(); drawPreview(); });
   rows.push(() => { press.checked = !!O().pressure; });
@@ -394,6 +419,7 @@ function brushPanel(app) {
   const reset = h('button', { class: 'btn small', onclick: () => { applyPreset({}); } }, 'Reset');
   const body = h('div', { class: 'brush-panel' }, prev,
     h('div', { class: 'brow' }, h('span', { class: 'lbl' }, 'Tip'), tipSel),
+    h('div', { class: 'brow' }, abrImp, abrExp, abrDel, abrFile),
     ctl('size', 'Size', 1, 5000, 'px', [1, 300]), ctl('hardness', 'Hardness', 0, 100, '%'), ctl('spacing', 'Spacing', 1, 400, '%', [1, 200]),
     ctl('roundness', 'Roundness', 5, 100, '%'), ctl('angle', 'Angle', -180, 180, '°'), ctl('scatter', 'Scatter', 0, 500, '%', [0, 300]),
     ctl('sizeJitter', 'Size jitter', 0, 100, '%'), ctl('opacityJitter', 'Opacity jitter', 0, 100, '%'),

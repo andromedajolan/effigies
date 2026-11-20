@@ -1,5 +1,6 @@
 // Tools for stage 1: Move, Brush (plain), Eraser (plain), Hand, Zoom, Eyedropper.
 // Each tool: {id, name, key, group, icon, options[], down/move/up/cancel, ring()}
+import { getBrushAlpha } from './brushes.js';
 import { makeCanvas, ctxOf, clamp, hexToRgb, rgbToHex, toast, rectIntersect } from './util.js';
 import { compose, releaseCanvas } from './render.js';
 import { createTools2 } from './tools2.js';
@@ -31,12 +32,20 @@ function noise() {
 }
 /** A brush tip image (size x size) of the given colour; roundness and angle are applied when stamping. */
 export function brushTip(size, hardness, color, shape = 'round') {
+  let custom = null;
+  if (shape.startsWith('c:')) { custom = getBrushAlpha(shape.slice(2)); if (!custom) shape = 'round'; }
   const key = size.toFixed(2) + '|' + hardness + '|' + color + '|' + shape;
   if (tipCache.key === key) return tipCache.canvas;
   const d = Math.max(1, Math.ceil(size) + 2), c = makeCanvas(d, d, false), g = c.getContext('2d');
   const r = size / 2, cx = d / 2;
   const [R, G, B] = hexToRgb(color);
   const soft = clamp(1 - hardness / 100, 0, 1);
+  if (custom) {
+    const k = size / Math.max(custom.width, custom.height), tw = custom.width * k, th = custom.height * k;
+    g.imageSmoothingQuality = 'high'; g.drawImage(custom, cx - tw / 2, cx - th / 2, tw, th);
+    g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, d, d); g.globalCompositeOperation = 'source-over';
+    tipCache = { key, canvas: c }; return c;
+  }
   if (shape === 'square' || shape === 'star') {
     g.fillStyle = color; g.beginPath();
     if (shape === 'square') g.rect(cx - r, cx - r, size, size);

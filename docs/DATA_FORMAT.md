@@ -89,6 +89,14 @@ Effigies is part of the Abditum studio suite. This file documents what it stores
 
 Imported `.pat` patterns are kept in IndexedDB (`effigies-db`): PNG blobs under `pat|<id>` and an index in the `meta` store under `patterns`. They are local to Effigies.
 
+## Brush tip library (browser storage)
+
+Brush tips imported from Photoshop `.abr` files are kept in IndexedDB (`effigies-db`): white-on-transparent PNG blobs under `brush|<id>` and an index (`id`, `name`, `set`, `spacing`, `w`, `h`) in the `meta` store under `brushes`. A brush option `tip` of `c:<id>` selects one. They are local to Effigies; Export .abr writes them out as a version 2 sampled-brush file.
+
+## Photoshop files (.psd)
+
+Open Image or PSD reads RGB, grayscale and CMYK files at 8 or 16 bits per channel (RAW, RLE and ZIP compression): layers, groups, blend modes, opacity, fill, visibility, clipping and layer masks. Export PSD writes 8-bit RGB with layers, groups, masks, blend modes, opacity, fill, visibility and clipping. Not carried over: live text, smart objects, layer styles (they are flattened into the pixels on export and ignored on import) and adjustment layers (left out). PSD files are not part of the project format; use the project file for a lossless backup.
+
 ## Size note
 
 Layers are PNG data URLs, so a project with many full-size layers is large (about 186 MB for 20 layers at 3000 x 3000).

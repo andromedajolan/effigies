@@ -17,9 +17,11 @@ import { buildMenus, buildAppbar, buildToolbox, buildOptionsBar, buildTabs, buil
 import { openDialog, confirmDialog, alertDialog, newDocDialog, imageSizeDialog, canvasSizeDialog, exportDialog, prefsDialog, helpDialog } from './dialogs.js';
 import { saveDoc, loadDoc, deleteDocStored, listStoredDocs, metaGet, metaSet, persistRequest, storageEstimate } from './store.js';
 import { exportProject, importProject } from './project.js';
+import { docFromPsd, psdFromDoc } from './psd-io.js';
+import { brushEvents, initBrushes } from './brushes.js';
 import { renderFull } from './render.js';
 
-export const APP_VERSION = '0.8.0'; // keep in sync with VERSION in sw.js
+export const APP_VERSION = '0.9.0'; // keep in sync with VERSION in sw.js
 
 const PREF_KEY = 'effigies.prefs';
 const DEFAULT_PREFS = { wheel: 'zoom', undoMode: 'cs5', historyStates: 50, rulers: false, guidesShow: true, guidesLock: false, snap: true, guideCenter: false, guideThirds: false, guideSafe: false, panels: {}, toolOpts: {}, fg: '#000000', bg: '#ffffff', tool: 'brush', groupCurrent: {} };
@@ -145,7 +147,17 @@ async function newDocument(spec) {
   const L = new Layer({ name: 'Layer ' + doc.seq++ }); doc.layers.push(L); doc.activeId = L.id;
   app.openDoc(doc);
 }
+async function openPsdFile(file) {
+  try {
+    toast('Reading ' + file.name + '…', 15000);
+    const { doc, skipped } = await docFromPsd(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, '') || 'PSD');
+    if (!(await confirmMemory(doc.w * doc.h * 4))) return;
+    app.openDoc(doc);
+    toast(skipped.length ? `Opened ${file.name}. ${skipped.length} adjustment layer${skipped.length > 1 ? 's were' : ' was'} skipped (not supported in PSD import).` : `Opened ${file.name}.`, skipped.length ? 7000 : 3500);
+  } catch (e) { toast(e.message || 'Could not open that PSD.', 6000); }
+}
 async function openImageFile(file) {
+  if (/\.psd$/i.test(file.name)) return openPsdFile(file);
   try {
     const bmp = await createImageBitmap(file);
     if (bmp.width > 12000 || bmp.height > 12000) { toast('That image is too large for this device (limit 12000 px per side).'); bmp.close && bmp.close(); return; }
@@ -196,6 +208,15 @@ A.exportProject = async () => {
   const d = app.doc; if (!d) return;
   toast('Building project file…', 8000);
   try { const blob = await exportProject(d, APP_VERSION); download(blob, d.name.replace(/[\\/:*?"<>|]+/g, '_') + '.effigies.json'); toast(`Project exported (${fmtBytes(blob.size)}).`); } catch (e) { toast('Export failed: ' + e.message, 6000); }
+};
+A.exportPsd = async () => {
+  const d = app.doc; if (!d) return;
+  toast('Building PSD…', 15000); await new Promise((r) => setTimeout(r, 30));
+  try {
+    const r = psdFromDoc(d); download(r.blob, d.name.replace(/[\\/:*?"<>|]+/g, '_') + '.psd');
+    const notes = [r.baked && `${r.baked} layer${r.baked > 1 ? 's' : ''} with styles were flattened into pixels`, r.skipped && `${r.skipped} adjustment layer${r.skipped > 1 ? 's' : ''} left out`].filter(Boolean).join('; ');
+    toast(`Exported PSD (${fmtBytes(r.blob.size)}).` + (notes ? ' ' + notes + '.' : ''), notes ? 8000 : 3500);
+  } catch (e) { toast('Export failed: ' + e.message, 6000); }
 };
 A.exportImage = async () => {
   const d = app.doc; if (!d) return;
@@ -557,7 +578,7 @@ window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTra
 window.addEventListener('drop', async (e) => {
   if (!e.dataTransfer || !e.dataTransfer.files.length) return;
   e.preventDefault();
-  for (const f of e.dataTransfer.files) { if (/\.(json|effigies)$/i.test(f.name)) await openProjectFile(f); else if (f.type.startsWith('image/')) await openImageFile(f); }
+  for (const f of e.dataTransfer.files) { if (/\.(json|effigies)$/i.test(f.name)) await openProjectFile(f); else if (f.type.startsWith('image/') || /\.psd$/i.test(f.name)) await openImageFile(f); }
 });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { app.flushPending(); doSave(); } });
 window.addEventListener('pagehide', () => { app.flushPending(); doSave(); });
@@ -575,6 +596,8 @@ async function boot() {
   app.guides = new Guides(app); app.transform = new FreeTransform(app);
   patternEvents.onChange = () => { app.emit('patterns'); app.vp.invalidate && app.vp.invalidate(); };
   initPatterns().catch(() => {});
+  brushEvents.onChange = () => { app.emit('brushes'); app.vp.invalidate && app.vp.invalidate(); };
+  initBrushes().catch(() => {});
   const dock = buildDock(app); app.dockEls = dock.panels;
   buildMenus(app); buildAppbar(app); buildToolbox(app); buildOptionsBar(app); buildTabs(app); buildStatusbar(app);
   let t = 'gray'; try { t = localStorage.getItem('studio.theme') === 'dark' ? 'dark' : 'gray'; } catch { /* ignore */ }

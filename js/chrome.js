@@ -43,13 +43,14 @@ export function buildMenus(app) {
   const MENUS = [
     ['File', () => [
       { label: 'New…', key: 'Ctrl+N', run: A.newDoc },
-      { label: 'Open Image…', key: 'Ctrl+O', run: A.openImage },
+      { label: 'Open Image or PSD…', key: 'Ctrl+O', run: A.openImage },
       { label: 'Open Project File…', run: A.openProject },
       '---',
       { label: 'Close', key: 'Ctrl+W', run: A.closeDoc, enabled: has },
       { label: 'Save Now (autosave is always on)', key: 'Ctrl+S', run: A.saveNow, enabled: has },
       '---',
       { label: 'Export Image (PNG / JPG)…', run: A.exportImage, enabled: has },
+      { label: 'Export PSD (Photoshop)…', run: A.exportPsd, enabled: has },
       { label: 'Export Project File…', key: 'Ctrl+Shift+S', run: A.exportProject, enabled: has },
     ]],
     ['Edit', () => [
