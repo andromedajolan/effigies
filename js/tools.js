@@ -3,6 +3,7 @@
 import { makeCanvas, ctxOf, clamp, hexToRgb, rgbToHex, toast, rectIntersect } from './util.js';
 import { compose, releaseCanvas } from './render.js';
 import { createTools2 } from './tools2.js';
+import { createRetouchTools } from './retouch.js';
 
 const svg = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 export const ICONS = {
@@ -323,6 +324,6 @@ class EyedropperTool {
 
 export function createTools(app) {
   const t2 = createTools2(app), pick = (re) => t2.filter((t) => re.test(t.id));
-  const list = [new MoveTool(app), ...pick(/^marquee/), ...pick(/^crop/), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), ...pick(/^(gradient|bucket)/), ...pick(/^type$/), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
+  const list = [new MoveTool(app), ...pick(/^marquee/), ...pick(/^crop/), new StrokeTool(app, 'brush', 'Brush Tool', 'b', false), new StrokeTool(app, 'eraser', 'Eraser Tool', 'e', true), ...createRetouchTools(app), ...pick(/^(gradient|bucket)/), ...pick(/^type$/), new EyedropperTool(app), new HandTool(app), new ZoomTool(app)];
   return Object.fromEntries(list.map((t) => [t.id, t]));
 }
